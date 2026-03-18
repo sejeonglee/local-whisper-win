@@ -77,6 +77,5 @@ def ensure_model_ready(emit_event: Callable[..., None], cache_dir: Path | None =
 
     emit_event("loading_model", backend=BACKEND)
     time.sleep(0.1)
-    emit_event("ready", model=MODEL_NAME, backend=BACKEND, bootstrap_mode="scaffold")
 
     return BootstrapResult(cache_dir=resolved_cache_dir)

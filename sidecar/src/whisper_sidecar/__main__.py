@@ -1,22 +1,29 @@
 from __future__ import annotations
 
+import os
 import sys
+from typing import Any
 
-from .bootstrap import ensure_model_ready
+from .bootstrap import BootstrapResult, ensure_model_ready
 from .ipc import ProtocolError, emit_error, emit_event, iter_commands
-from .recorder import StubRecorder
-from .transcriber import StubTranscriber
+from .recorder import Recorder, StubRecorder
+from .transcriber import StubTranscriber, WhisperTranscriber
 
 
 def main() -> int:
-    recorder = StubRecorder()
-    transcriber = StubTranscriber()
-
     try:
-        ensure_model_ready(emit_event)
+        bootstrap_result = ensure_model_ready(emit_event)
+        recorder, transcriber = create_runtime(bootstrap_result)
     except Exception as exc:  # pragma: no cover - startup guardrail
         emit_error("startup_failed", str(exc), fatal=True)
         return 1
+
+    emit_event(
+        "ready",
+        model=getattr(transcriber, "model_name", bootstrap_result.model),
+        backend=getattr(transcriber, "backend", bootstrap_result.backend),
+        bootstrap_mode="scaffold" if bootstrap_result.stub else "live",
+    )
 
     for item in iter_commands(sys.stdin):
         if isinstance(item, ProtocolError):
@@ -43,6 +50,20 @@ def main() -> int:
             emit_error("runtime_error", str(exc))
 
     return 0
+
+
+def create_runtime(bootstrap_result: BootstrapResult) -> tuple[Any, Any]:
+    runtime_mode = os.environ.get("WHISPER_WINDOWS_RUNTIME", "scaffold").strip().lower()
+    if runtime_mode == "live":
+        return (
+            Recorder(),
+            WhisperTranscriber.load(
+                model_name=bootstrap_result.model,
+                backend=bootstrap_result.backend,
+            ),
+        )
+
+    return StubRecorder(), StubTranscriber()
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ class BootstrapTests(unittest.TestCase):
             marker = cache_marker_path(cache_root)
             self.assertTrue(marker.exists())
             self.assertIn("model_download_started", events)
-            self.assertIn("ready", events)
+            self.assertIn("loading_model", events)
 
     def test_marker_path_points_to_model_specific_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
