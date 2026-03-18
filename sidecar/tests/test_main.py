@@ -1,4 +1,3 @@
-from io import StringIO
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -40,6 +39,30 @@ class MainLoopTests(unittest.TestCase):
 
         with patch.object(sidecar_main, "Recorder", return_value="recorder") as recorder_cls:
             with patch.object(sidecar_main.WhisperTranscriber, "load", return_value="transcriber") as load:
+                recorder, transcriber = sidecar_main.create_runtime(bootstrap_result)
+
+        self.assertEqual((recorder, transcriber), ("recorder", "transcriber"))
+        recorder_cls.assert_called_once_with()
+        load.assert_called_once_with(
+            model_name=bootstrap_result.model,
+            model_source=str(bootstrap_result.model_path),
+            backend=bootstrap_result.backend,
+        )
+
+    def test_create_runtime_uses_qnn_transcriber_when_backend_is_qnn(self) -> None:
+        bootstrap_result = BootstrapResult(
+            cache_dir=Path("cache"),
+            stub=False,
+            backend="qnn",
+            model_path=Path("cache") / "whisper_large_v3_turbo-hfwhisperdecoder-qualcomm_snapdragon_x_elite.bin",
+        )
+
+        with patch.object(sidecar_main, "Recorder", return_value="recorder") as recorder_cls:
+            with patch.object(
+                sidecar_main.QualcommQnnTranscriber,
+                "load",
+                return_value="transcriber",
+            ) as load:
                 recorder, transcriber = sidecar_main.create_runtime(bootstrap_result)
 
         self.assertEqual((recorder, transcriber), ("recorder", "transcriber"))

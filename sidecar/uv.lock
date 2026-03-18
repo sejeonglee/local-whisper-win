@@ -495,7 +495,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "faster-whisper", specifier = ">=1.2.1" },
-    { name = "numpy", specifier = ">=2.4.3" },
-    { name = "sounddevice", specifier = ">=0.5.5" },
+    { name = "faster-whisper", specifier = "==1.2.1" },
+    { name = "numpy", specifier = "==2.4.3" },
+    { name = "sounddevice", specifier = "==0.5.5" },
 ]

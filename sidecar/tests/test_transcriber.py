@@ -1,7 +1,7 @@
 import unittest
 
 from whisper_sidecar.recorder import RecordingResult
-from whisper_sidecar.transcriber import MODEL_NAME, WhisperTranscriber
+from whisper_sidecar.transcriber import MODEL_NAME, QualcommQnnTranscriber, TranscriberError, WhisperTranscriber
 
 
 class Segment:
@@ -48,6 +48,10 @@ class TranscriberTests(unittest.TestCase):
         self.assertEqual(result.backend, "cuda")
         self.assertEqual(result.model, MODEL_NAME)
         self.assertEqual(model.calls, [([0.1, 0.2, 0.3], True)])
+
+    def test_qualcomm_transcriber_load_requires_model_path(self) -> None:
+        with self.assertRaises(TranscriberError):
+            QualcommQnnTranscriber.load(model_source=None)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ dependencies = [
     "faster-whisper==1.2.1",
     "numpy==2.4.3",
     "sounddevice==0.5.5",
+    "onnxruntime-qnn>=1.18.0; platform_system == 'Windows' and (platform_machine == 'ARM64' or platform_machine == 'arm64' or platform_machine == 'aarch64')",
 ]
 
 [project.scripts]
