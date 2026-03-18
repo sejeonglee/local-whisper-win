@@ -3,10 +3,9 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{debug_log, sidecar::SidecarEvent, tray};
+use crate::{debug_log, settings::DEFAULT_HOTKEY, sidecar::SidecarEvent, tray};
 
 pub const APP_STATE_CHANGED: &str = "app-state-changed";
-pub const HOTKEY_LABEL: &str = "Ctrl+H";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -48,7 +47,7 @@ impl Default for AppSnapshot {
     fn default() -> Self {
         Self {
             phase: AppPhase::Starting,
-            hotkey: HOTKEY_LABEL.to_string(),
+            hotkey: DEFAULT_HOTKEY.to_string(),
             model: None,
             backend: None,
             message: "Preparing WhisperWindows startup...".to_string(),
@@ -107,6 +106,24 @@ pub fn set_error(app: &AppHandle, message: impl Into<String>) -> Result<(), Stri
     })
 }
 
+pub fn seed_hotkey(app: &AppHandle, hotkey: impl Into<String>) {
+    let hotkey = hotkey.into();
+    if let Ok(mut guard) = app.state::<AppState>().inner.lock() {
+        guard.hotkey = hotkey;
+        guard.updated_at = now_timestamp_ms();
+    }
+}
+
+pub fn set_hotkey_label(app: &AppHandle, hotkey: impl Into<String>) -> Result<(), String> {
+    let hotkey = hotkey.into();
+    update(app, move |state| {
+        state.hotkey = hotkey.clone();
+        if matches!(state.phase, AppPhase::Ready) {
+            state.message = ready_message(&state.hotkey);
+        }
+    })
+}
+
 pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), String> {
     debug_log::append(format!("apply_sidecar_event {}", event.event));
     update(app, |state| match event.event.as_str() {
@@ -155,7 +172,7 @@ pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), 
             state.download_progress = None;
             state.last_error = None;
             state.is_stub_bootstrap = event.bootstrap_mode.as_deref() == Some("scaffold");
-            state.message = format!("Ready for dictation. Press {} to toggle.", HOTKEY_LABEL);
+            state.message = ready_message(&state.hotkey);
         }
         "listening" => {
             state.phase = AppPhase::Listening;
@@ -173,12 +190,12 @@ pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), 
                     text.chars().count()
                 )
             } else {
-                format!("Ready for dictation. Press {} to toggle.", HOTKEY_LABEL)
+                ready_message(&state.hotkey)
             };
         }
         "empty_audio" => {
             state.phase = AppPhase::Ready;
-            state.message = format!("No speech captured. Press {} to try again.", HOTKEY_LABEL);
+            state.message = empty_audio_message(&state.hotkey);
         }
         "error" | "fatal" => {
             state.phase = AppPhase::Error;
@@ -195,6 +212,14 @@ pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), 
         }
         _ => {}
     })
+}
+
+fn ready_message(hotkey: &str) -> String {
+    format!("Ready for dictation. Press {hotkey} to toggle.")
+}
+
+fn empty_audio_message(hotkey: &str) -> String {
+    format!("No speech captured. Press {hotkey} to try again.")
 }
 
 fn update(app: &AppHandle, mutate: impl FnOnce(&mut AppSnapshot)) -> Result<(), String> {
