@@ -139,13 +139,14 @@ def download_live_model(
         def __init__(self, *args, **kwargs):
             self._is_bytes_progress = kwargs.get("name") == "huggingface_hub.snapshot_download"
             self._last_reported = -1
+            self._tracked_bytes = int(kwargs.get("initial", 0))
             super().__init__(*args, **kwargs)
 
         def _emit(self, *, force: bool = False) -> None:
             if not self._is_bytes_progress:
                 return
 
-            received = min(int(self.n), total_bytes)
+            received = min(max(int(self.n), self._tracked_bytes), total_bytes)
             if not force and received == self._last_reported:
                 return
 
@@ -158,6 +159,7 @@ def download_live_model(
             self._last_reported = received
 
         def update(self, n=1):
+            self._tracked_bytes += int(n)
             value = super().update(n)
             self._emit()
             return value
