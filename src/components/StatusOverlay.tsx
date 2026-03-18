@@ -5,9 +5,11 @@ import { formatBytes } from "../lib/app-state";
 interface StatusOverlayProps {
   state: AppSnapshot;
   onSaveHotkey: (hotkey: string) => Promise<string | null>;
+  onSaveAsrEngine: (asrEngine: string) => Promise<string | null>;
 }
 
 type DashboardTab = "overview" | "runtime" | "product";
+type AsrEngine = "whisper" | "qwen3";
 
 interface PhaseContent {
   badge: string;
@@ -129,7 +131,7 @@ const roadmap: RoadmapItem[] = [
   {
     stage: "Next",
     title: "Local cleanup pass",
-    description: "Shape punctuation and remove filler words after Whisper so the result reads more intentionally.",
+    description: "Shape punctuation and remove filler words after transcription so the result reads more intentionally.",
   },
   {
     stage: "Later",
@@ -165,6 +167,19 @@ const presetHotkeys = [
   "Alt+F10",
 ];
 
+const engineOptions: { id: AsrEngine; title: string; description: string }[] = [
+  {
+    id: "whisper",
+    title: "Whisper",
+    description: "Keeps the existing faster-whisper + CTranslate2 path with large-v3-turbo.",
+  },
+  {
+    id: "qwen3",
+    title: "Qwen3-ASR",
+    description: "Uses the native Windows transformers backend and auto-falls back to 0.6B on tighter 6GB GPUs.",
+  },
+];
+
 const visibleWindows = [
   {
     title: "Dashboard window",
@@ -197,7 +212,7 @@ function getPipeline(state: AppSnapshot) {
       title: "Warm the local runtime",
       description: progress
         ? `${formatBytes(progress.receivedBytes)} of ${formatBytes(progress.totalBytes)} cached for ${progress.model ?? state.model ?? "large-v3-turbo"}.`
-        : `${state.model ?? "large-v3-turbo"} on ${state.backend ?? "local runtime"}.`,
+        : `${formatEngineLabel(state.engine)} using ${state.model ?? "large-v3-turbo"} on ${state.backend ?? "local runtime"}.`,
     },
     {
       title: "Listen from the global hotkey",
@@ -205,7 +220,7 @@ function getPipeline(state: AppSnapshot) {
     },
     {
       title: "Transcribe locally",
-      description: "The Python sidecar handles audio capture, Whisper inference, and ready/error events.",
+      description: "The Python sidecar handles audio capture, selected ASR inference, and ready/error events.",
     },
     {
       title: "Paste and restore",
@@ -248,12 +263,20 @@ function formatProgress(state: AppSnapshot): string {
   return `${progress.percent ?? 0}% cached (${formatBytes(progress.receivedBytes)} / ${formatBytes(progress.totalBytes)})`;
 }
 
-export function StatusOverlay({ state, onSaveHotkey }: StatusOverlayProps) {
+function formatEngineLabel(engine: AppSnapshot["engine"]): string {
+  return engine === "qwen3" ? "Qwen3-ASR" : "Whisper";
+}
+
+export function StatusOverlay({ state, onSaveHotkey, onSaveAsrEngine }: StatusOverlayProps) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
   const [hotkeyDraft, setHotkeyDraft] = useState(state.hotkey);
   const [hotkeyNotice, setHotkeyNotice] = useState<string | null>(null);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   const [isSavingHotkey, setIsSavingHotkey] = useState(false);
+  const [engineDraft, setEngineDraft] = useState<AsrEngine>((state.engine as AsrEngine | null) ?? "whisper");
+  const [engineNotice, setEngineNotice] = useState<string | null>(null);
+  const [engineError, setEngineError] = useState<string | null>(null);
+  const [isSavingEngine, setIsSavingEngine] = useState(false);
 
   useEffect(() => {
     if (
@@ -269,19 +292,25 @@ export function StatusOverlay({ state, onSaveHotkey }: StatusOverlayProps) {
     setHotkeyDraft(state.hotkey);
   }, [state.hotkey]);
 
+  useEffect(() => {
+    setEngineDraft((state.engine as AsrEngine | null) ?? "whisper");
+  }, [state.engine]);
+
   const meta = phaseContent[state.phase];
   const progress = state.downloadProgress;
   const pipeline = getPipeline(state);
   const activePipelineIndex = getActivePipelineIndex(state.phase);
   const dictionaryEntries: DictionaryEntry[] = [
     { label: "WhisperWindows", source: "manual" },
-    { label: "large-v3-turbo", source: "auto" },
+    { label: state.model ?? "large-v3-turbo", source: "auto" },
     { label: "RTX 4050", source: "manual" },
-    { label: "CTranslate2", source: "manual" },
+    { label: formatEngineLabel(state.engine), source: "auto" },
+    { label: state.backend ?? "CUDA", source: "auto" },
     { label: "Korean + English", source: "auto" },
     { label: state.hotkey, source: "manual" },
   ];
   const isHotkeyDirty = hotkeyDraft.trim() !== state.hotkey;
+  const isEngineDirty = engineDraft !== ((state.engine as AsrEngine | null) ?? "whisper");
 
   async function handleHotkeySubmit(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
@@ -307,6 +336,32 @@ export function StatusOverlay({ state, onSaveHotkey }: StatusOverlayProps) {
     setHotkeyDraft(preset);
     setHotkeyError(null);
     setHotkeyNotice(null);
+  }
+
+  async function handleEngineSubmit(nextEngine?: AsrEngine) {
+    const selectedEngine = nextEngine ?? engineDraft;
+    if ((!isEngineDirty && selectedEngine === ((state.engine as AsrEngine | null) ?? "whisper")) || isSavingEngine) {
+      return;
+    }
+
+    setIsSavingEngine(true);
+    setEngineNotice(null);
+    setEngineError(null);
+    const error = await onSaveAsrEngine(selectedEngine);
+    setIsSavingEngine(false);
+
+    if (error) {
+      setEngineError(error);
+      return;
+    }
+
+    setEngineNotice("ASR engine updated. The sidecar is restarting with the selected model path.");
+  }
+
+  function applyEngineOption(engine: AsrEngine) {
+    setEngineDraft(engine);
+    setEngineError(null);
+    setEngineNotice(null);
   }
 
   return (
@@ -338,6 +393,10 @@ export function StatusOverlay({ state, onSaveHotkey }: StatusOverlayProps) {
             </p>
 
             <div className="metric-grid">
+              <article className="metric-card">
+                <span>Engine</span>
+                <strong>{formatEngineLabel(state.engine)}</strong>
+              </article>
               <article className="metric-card">
                 <span>Runtime</span>
                 <strong>{state.backend ?? "Preflight"}</strong>
@@ -380,8 +439,16 @@ export function StatusOverlay({ state, onSaveHotkey }: StatusOverlayProps) {
                 <dd>{state.isStubBootstrap ? "Scaffold mode" : "Live runtime"}</dd>
               </div>
               <div>
+                <dt>Engine</dt>
+                <dd>{formatEngineLabel(state.engine)}</dd>
+              </div>
+              <div>
                 <dt>Hotkey</dt>
                 <dd>{state.hotkey}</dd>
+              </div>
+              <div>
+                <dt>Model</dt>
+                <dd>{state.model ?? "large-v3-turbo"}</dd>
               </div>
               <div>
                 <dt>Cache</dt>
@@ -515,6 +582,10 @@ export function StatusOverlay({ state, onSaveHotkey }: StatusOverlayProps) {
 
                 <dl className="detail-grid">
                   <div>
+                    <dt>Engine</dt>
+                    <dd>{formatEngineLabel(state.engine)}</dd>
+                  </div>
+                  <div>
                     <dt>Backend</dt>
                     <dd>{state.backend ?? "preflight"}</dd>
                   </div>
@@ -574,6 +645,61 @@ export function StatusOverlay({ state, onSaveHotkey }: StatusOverlayProps) {
                     <span>The runtime is reusing a previously prepared model directory.</span>
                   </div>
                 )}
+              </article>
+
+              <article className="panel">
+                <div className="panel__header">
+                  <div>
+                    <div className="section-label">Engine</div>
+                    <h3>Speech model runtime</h3>
+                  </div>
+                </div>
+
+                <div className="preset-row" aria-label="Available ASR engines">
+                  {engineOptions.map((option) => (
+                    <button
+                      key={option.id}
+                      className={`preset-chip ${engineDraft === option.id ? "preset-chip--active" : ""}`}
+                      type="button"
+                      onClick={() => applyEngineOption(option.id)}
+                    >
+                      {option.title}
+                    </button>
+                  ))}
+                </div>
+
+                <p className="panel__copy">
+                  {engineOptions.find((option) => option.id === engineDraft)?.description}
+                </p>
+
+                <div className="hotkey-form__row">
+                  <button
+                    className="hotkey-save"
+                    type="button"
+                    disabled={!isEngineDirty || isSavingEngine}
+                    onClick={() => void handleEngineSubmit()}
+                  >
+                    {isSavingEngine ? "Switching..." : "Switch engine"}
+                  </button>
+                </div>
+
+                {engineNotice ? <div className="callout callout--success">{engineNotice}</div> : null}
+                {engineError ? <div className="callout callout--error">{engineError}</div> : null}
+
+                <div className="stack-list">
+                  <article className="stack-list__item">
+                    <h4>Current engine</h4>
+                    <p>{formatEngineLabel(state.engine)} is active in the desktop sidecar right now.</p>
+                  </article>
+                  <article className="stack-list__item">
+                    <h4>Resolved model</h4>
+                    <p>{state.model ?? "large-v3-turbo"} is the actual checkpoint the runtime loaded.</p>
+                  </article>
+                  <article className="stack-list__item">
+                    <h4>6GB safety policy</h4>
+                    <p>Qwen3-ASR automatically falls back to 0.6B when the GPU does not have enough VRAM for 1.7B.</p>
+                  </article>
+                </div>
               </article>
 
               <article className="panel">

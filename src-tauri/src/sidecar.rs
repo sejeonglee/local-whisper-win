@@ -5,14 +5,16 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
-use crate::{clipboard, debug_log, state};
+use crate::{clipboard, debug_log, settings, state};
 
 #[derive(Default)]
 pub struct SidecarRuntime {
     stdin: Mutex<Option<ChildStdin>>,
     shutdown_requested: Mutex<bool>,
+    generation: Mutex<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -21,6 +23,8 @@ pub struct SidecarEvent {
     pub message_type: String,
     pub version: u8,
     pub event: String,
+    #[serde(default)]
+    pub engine: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -32,6 +36,8 @@ pub struct SidecarEvent {
     #[serde(default)]
     pub text: Option<String>,
     #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
     pub message: Option<String>,
     #[serde(default)]
     pub bootstrap_mode: Option<String>,
@@ -39,11 +45,14 @@ pub struct SidecarEvent {
 
 pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
     let sidecar_root = sidecar_root(app)?;
+    let asr_engine = settings::load_asr_engine(app);
+    let generation = next_generation(app);
     let mut command = build_sidecar_command(&sidecar_root);
     let merged_python_path = merged_python_path(&sidecar_root)?;
 
     command
         .current_dir(&sidecar_root)
+        .env("WHISPER_WINDOWS_ASR_ENGINE", &asr_engine)
         .env("PYTHONPATH", merged_python_path)
         .env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1")
@@ -51,7 +60,12 @@ pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     apply_bundled_python_env(&mut command, &sidecar_root)?;
-    debug_log::append(format!("spawning sidecar in {}", sidecar_root.display()));
+    debug_log::append(format!(
+        "spawning sidecar generation={} engine={} in {}",
+        generation,
+        asr_engine,
+        sidecar_root.display()
+    ));
 
     let mut child = command
         .spawn()
@@ -79,11 +93,27 @@ pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
         .lock()
         .expect("sidecar runtime poisoned") = false;
 
-    spawn_stdout_thread(app.clone(), stdout);
+    spawn_stdout_thread(app.clone(), stdout, generation);
     spawn_stderr_thread(stderr);
-    spawn_wait_thread(app.clone(), child);
+    spawn_wait_thread(app.clone(), child, generation);
 
     Ok(())
+}
+
+pub fn restart_sidecar(app: &AppHandle) -> Result<(), String> {
+    let has_running_sidecar = app
+        .state::<SidecarRuntime>()
+        .stdin
+        .lock()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false);
+
+    if has_running_sidecar {
+        let _ = request_shutdown(app);
+        std::thread::sleep(Duration::from_millis(350));
+    }
+
+    spawn_sidecar(app)
 }
 
 pub fn request_shutdown(app: &AppHandle) -> Result<(), String> {
@@ -252,12 +282,18 @@ fn apply_bundled_python_env(command: &mut Command, sidecar_root: &Path) -> Resul
     Ok(())
 }
 
-fn spawn_stdout_thread(app: AppHandle, stdout: ChildStdout) {
+fn spawn_stdout_thread(app: AppHandle, stdout: ChildStdout, generation: u64) {
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             match line {
-                Ok(line) if !line.trim().is_empty() => handle_stdout_line(&app, &line),
+                Ok(line) if !line.trim().is_empty() => {
+                    if is_current_generation(&app, generation) {
+                        handle_stdout_line(&app, &line);
+                    } else {
+                        debug_log::append(format!("ignoring stale sidecar stdout: {line}"));
+                    }
+                }
                 Ok(_) => {}
                 Err(err) => {
                     let _ = state::set_error(&app, format!("Failed reading sidecar output: {err}"));
@@ -280,9 +316,10 @@ fn spawn_stderr_thread(stderr: ChildStderr) {
     });
 }
 
-fn spawn_wait_thread(app: AppHandle, mut child: Child) {
+fn spawn_wait_thread(app: AppHandle, mut child: Child, generation: u64) {
     std::thread::spawn(move || {
         let status = child.wait();
+        let is_current = is_current_generation(&app, generation);
         let shutdown_requested = app
             .state::<SidecarRuntime>()
             .shutdown_requested
@@ -291,20 +328,25 @@ fn spawn_wait_thread(app: AppHandle, mut child: Child) {
             .unwrap_or(false);
 
         if let Ok(mut guard) = app.state::<SidecarRuntime>().stdin.lock() {
-            guard.take();
+            if is_current {
+                guard.take();
+            }
         }
 
         match status {
-            Ok(status) if !status.success() && !shutdown_requested => {
+            Ok(status) if !status.success() && !shutdown_requested && is_current => {
                 debug_log::append(format!("sidecar exited with {status}"));
                 let _ = state::set_error(&app, format!("Sidecar exited with status {status}."));
             }
             Ok(status) => {
                 debug_log::append(format!("sidecar exited cleanly with {status}"));
             }
-            Err(err) => {
+            Err(err) if is_current => {
                 debug_log::append(format!("sidecar wait failed: {err}"));
                 let _ = state::set_error(&app, format!("Failed waiting for sidecar exit: {err}"));
+            }
+            Err(err) => {
+                debug_log::append(format!("stale sidecar wait failed: {err}"));
             }
         }
     });
@@ -346,4 +388,19 @@ fn parse_event(line: &str) -> Result<SidecarEvent, String> {
         return Err(format!("Unsupported protocol version: {}", event.version));
     }
     Ok(event)
+}
+
+fn next_generation(app: &AppHandle) -> u64 {
+    let runtime = app.state::<SidecarRuntime>();
+    let mut guard = runtime.generation.lock().expect("sidecar runtime poisoned");
+    *guard += 1;
+    *guard
+}
+
+fn is_current_generation(app: &AppHandle, generation: u64) -> bool {
+    app.state::<SidecarRuntime>()
+        .generation
+        .lock()
+        .map(|guard| *guard == generation)
+        .unwrap_or(false)
 }

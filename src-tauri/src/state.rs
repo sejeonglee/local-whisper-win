@@ -3,7 +3,12 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{debug_log, settings::DEFAULT_HOTKEY, sidecar::SidecarEvent, tray};
+use crate::{
+    debug_log,
+    settings::{DEFAULT_ASR_ENGINE, DEFAULT_HOTKEY},
+    sidecar::SidecarEvent,
+    tray,
+};
 
 pub const APP_STATE_CHANGED: &str = "app-state-changed";
 
@@ -34,6 +39,7 @@ pub struct DownloadProgress {
 pub struct AppSnapshot {
     pub phase: AppPhase,
     pub hotkey: String,
+    pub engine: Option<String>,
     pub model: Option<String>,
     pub backend: Option<String>,
     pub message: String,
@@ -48,6 +54,7 @@ impl Default for AppSnapshot {
         Self {
             phase: AppPhase::Starting,
             hotkey: DEFAULT_HOTKEY.to_string(),
+            engine: Some(DEFAULT_ASR_ENGINE.to_string()),
             model: None,
             backend: None,
             message: "Preparing WhisperWindows startup...".to_string(),
@@ -114,12 +121,30 @@ pub fn seed_hotkey(app: &AppHandle, hotkey: impl Into<String>) {
     }
 }
 
+pub fn seed_asr_engine(app: &AppHandle, engine: impl Into<String>) {
+    let engine = engine.into();
+    if let Ok(mut guard) = app.state::<AppState>().inner.lock() {
+        guard.engine = Some(engine);
+        guard.updated_at = now_timestamp_ms();
+    }
+}
+
 pub fn set_hotkey_label(app: &AppHandle, hotkey: impl Into<String>) -> Result<(), String> {
     let hotkey = hotkey.into();
     update(app, move |state| {
         state.hotkey = hotkey.clone();
         if matches!(state.phase, AppPhase::Ready) {
-            state.message = ready_message(&state.hotkey);
+            state.message = ready_message(&state.hotkey, state.engine.as_deref(), state.model.as_deref());
+        }
+    })
+}
+
+pub fn set_asr_engine_label(app: &AppHandle, engine: impl Into<String>) -> Result<(), String> {
+    let engine = engine.into();
+    update(app, move |state| {
+        state.engine = Some(engine.clone());
+        if matches!(state.phase, AppPhase::Ready) {
+            state.message = ready_message(&state.hotkey, state.engine.as_deref(), state.model.as_deref());
         }
     })
 }
@@ -129,13 +154,15 @@ pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), 
     update(app, |state| match event.event.as_str() {
         "starting" => {
             state.phase = AppPhase::Starting;
+            state.engine = event.engine.clone().or_else(|| state.engine.clone());
             state.message = "Starting local transcription sidecar...".to_string();
             state.last_error = None;
         }
         "model_download_started" => {
             state.phase = AppPhase::DownloadingModel;
+            state.engine = event.engine.clone().or_else(|| state.engine.clone());
             state.model = event.model.clone();
-            state.message = "Preparing first-run model cache...".to_string();
+            state.message = download_message(state.engine.as_deref(), state.model.as_deref());
             state.download_progress = Some(DownloadProgress {
                 model: event.model.clone(),
                 received_bytes: 0,
@@ -147,6 +174,7 @@ pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), 
             let received = event.received_bytes.unwrap_or_default();
             let total = event.total_bytes.unwrap_or_default();
             state.phase = AppPhase::DownloadingModel;
+            state.engine = event.engine.clone().or_else(|| state.engine.clone());
             state.model = event.model.clone().or_else(|| state.model.clone());
             state.download_progress = Some(DownloadProgress {
                 model: event.model.clone().or_else(|| state.model.clone()),
@@ -158,21 +186,24 @@ pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), 
                     None
                 },
             });
-            state.message = "Downloading the first-run model cache...".to_string();
+            state.message = downloading_message(state.engine.as_deref(), state.model.as_deref());
         }
         "loading_model" => {
             state.phase = AppPhase::LoadingModel;
+            state.engine = event.engine.clone().or_else(|| state.engine.clone());
+            state.model = event.model.clone().or_else(|| state.model.clone());
             state.backend = event.backend.clone();
-            state.message = "Loading the local model into the sidecar...".to_string();
+            state.message = loading_message(state.engine.as_deref(), state.model.as_deref());
         }
         "ready" => {
             state.phase = AppPhase::Ready;
+            state.engine = event.engine.clone().or_else(|| state.engine.clone());
             state.model = event.model.clone().or_else(|| state.model.clone());
             state.backend = event.backend.clone().or_else(|| state.backend.clone());
             state.download_progress = None;
             state.last_error = None;
             state.is_stub_bootstrap = event.bootstrap_mode.as_deref() == Some("scaffold");
-            state.message = ready_message(&state.hotkey);
+            state.message = ready_message(&state.hotkey, state.engine.as_deref(), state.model.as_deref());
         }
         "listening" => {
             state.phase = AppPhase::Listening;
@@ -184,18 +215,24 @@ pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), 
         }
         "transcription" => {
             state.phase = AppPhase::Ready;
+            state.engine = event.engine.clone().or_else(|| state.engine.clone());
+            state.model = event.model.clone().or_else(|| state.model.clone());
+            state.backend = event.backend.clone().or_else(|| state.backend.clone());
             state.message = if let Some(text) = event.text.as_deref() {
                 format!(
                     "Pasted {} characters and restored the clipboard.",
                     text.chars().count()
                 )
             } else {
-                ready_message(&state.hotkey)
+                ready_message(&state.hotkey, state.engine.as_deref(), state.model.as_deref())
             };
         }
         "empty_audio" => {
             state.phase = AppPhase::Ready;
-            state.message = empty_audio_message(&state.hotkey);
+            state.engine = event.engine.clone().or_else(|| state.engine.clone());
+            state.model = event.model.clone().or_else(|| state.model.clone());
+            state.backend = event.backend.clone().or_else(|| state.backend.clone());
+            state.message = empty_audio_message(&state.hotkey, state.engine.as_deref(), state.model.as_deref());
         }
         "error" | "fatal" => {
             state.phase = AppPhase::Error;
@@ -214,12 +251,75 @@ pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), 
     })
 }
 
-fn ready_message(hotkey: &str) -> String {
+fn ready_message(hotkey: &str, engine: Option<&str>, model: Option<&str>) -> String {
+    if is_qwen_fallback(engine, model) {
+        return format!("Ready for dictation. Using Qwen3-ASR-0.6B fallback for this GPU. Press {hotkey} to toggle.");
+    }
+    if matches!(engine, Some("qwen3")) {
+        let label = model
+            .map(friendly_model_name)
+            .unwrap_or_else(|| "Qwen3-ASR".to_string());
+        return format!("Ready for dictation with {label}. Press {hotkey} to toggle.");
+    }
+
     format!("Ready for dictation. Press {hotkey} to toggle.")
 }
 
-fn empty_audio_message(hotkey: &str) -> String {
+fn empty_audio_message(hotkey: &str, _engine: Option<&str>, _model: Option<&str>) -> String {
     format!("No speech captured. Press {hotkey} to try again.")
+}
+
+fn download_message(engine: Option<&str>, model: Option<&str>) -> String {
+    if is_qwen_fallback(engine, model) {
+        return "Preparing the Qwen3-ASR-0.6B fallback cache for this GPU...".to_string();
+    }
+    if matches!(engine, Some("qwen3")) {
+        let label = model
+            .map(friendly_model_name)
+            .unwrap_or_else(|| "Qwen3-ASR".to_string());
+        return format!("Preparing the {label} model cache...");
+    }
+
+    "Preparing first-run model cache...".to_string()
+}
+
+fn downloading_message(engine: Option<&str>, model: Option<&str>) -> String {
+    if is_qwen_fallback(engine, model) {
+        return "Downloading the Qwen3-ASR-0.6B fallback model cache for this GPU...".to_string();
+    }
+    if matches!(engine, Some("qwen3")) {
+        let label = model
+            .map(friendly_model_name)
+            .unwrap_or_else(|| "Qwen3-ASR".to_string());
+        return format!("Downloading the {label} model cache...");
+    }
+
+    "Downloading the first-run model cache...".to_string()
+}
+
+fn loading_message(engine: Option<&str>, model: Option<&str>) -> String {
+    if is_qwen_fallback(engine, model) {
+        return "Loading Qwen3-ASR-0.6B fallback for this GPU...".to_string();
+    }
+    if matches!(engine, Some("qwen3")) {
+        let label = model
+            .map(friendly_model_name)
+            .unwrap_or_else(|| "Qwen3-ASR".to_string());
+        return format!("Loading {label} into the sidecar...");
+    }
+
+    "Loading the local model into the sidecar...".to_string()
+}
+
+fn is_qwen_fallback(engine: Option<&str>, model: Option<&str>) -> bool {
+    matches!(engine, Some("qwen3"))
+        && model
+            .map(|value| value.ends_with("Qwen3-ASR-0.6B") || value.ends_with("0.6B"))
+            .unwrap_or(false)
+}
+
+fn friendly_model_name(model: &str) -> String {
+    model.rsplit('/').next().unwrap_or(model).to_string()
 }
 
 fn update(app: &AppHandle, mutate: impl FnOnce(&mut AppSnapshot)) -> Result<(), String> {

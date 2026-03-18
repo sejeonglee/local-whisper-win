@@ -25,6 +25,20 @@ export default function App() {
     }
   }
 
+  async function handleAsrEngineSave(asrEngine: string): Promise<string | null> {
+    if (!isTauriRuntime()) {
+      return "ASR engine changes only work in the desktop app runtime.";
+    }
+
+    try {
+      const snapshot = await invoke<AppSnapshot>("set_asr_engine", { asrEngine });
+      setState(snapshot);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
   useEffect(() => {
     if (!isTauriRuntime()) {
       return;
@@ -61,5 +75,11 @@ export default function App() {
     };
   }, []);
 
-  return <StatusOverlay state={state} onSaveHotkey={handleHotkeySave} />;
+  return (
+    <StatusOverlay
+      state={state}
+      onSaveHotkey={handleHotkeySave}
+      onSaveAsrEngine={handleAsrEngineSave}
+    />
+  );
 }

@@ -52,6 +52,46 @@ fn set_hotkey(app: AppHandle, hotkey: String) -> Result<state::AppSnapshot, Stri
     Ok(state::snapshot(&app))
 }
 
+#[tauri::command]
+fn set_asr_engine(app: AppHandle, asr_engine: String) -> Result<state::AppSnapshot, String> {
+    let normalized = settings::normalize_asr_engine(&asr_engine)?;
+    let snapshot = state::snapshot(&app);
+    let phase = snapshot.phase.clone();
+    let current = snapshot
+        .engine
+        .clone()
+        .unwrap_or_else(|| settings::DEFAULT_ASR_ENGINE.to_string());
+    if normalized == current {
+        return Ok(state::snapshot(&app));
+    }
+
+    if matches!(
+        phase,
+        state::AppPhase::ListeningRequested | state::AppPhase::Listening | state::AppPhase::Transcribing
+    ) {
+        return Err("Wait until the current dictation cycle finishes before switching the ASR engine.".to_string());
+    }
+
+    debug_log::append(format!(
+        "asr engine update requested: {current} -> {normalized}"
+    ));
+
+    settings::save_asr_engine(&app, &normalized)?;
+    if let Err(err) = state::set_asr_engine_label(&app, normalized.clone()) {
+        let _ = settings::save_asr_engine(&app, &current);
+        return Err(err);
+    }
+
+    if let Err(err) = sidecar::restart_sidecar(&app) {
+        let _ = settings::save_asr_engine(&app, &current);
+        let _ = state::set_asr_engine_label(&app, current.clone());
+        return Err(err);
+    }
+
+    debug_log::append(format!("asr engine update applied: {normalized}"));
+    Ok(state::snapshot(&app))
+}
+
 fn handle_hotkey(app: &AppHandle) {
     let phase = state::snapshot(app).phase;
     debug_log::append(format!("hotkey pressed while phase={phase:?}"));
@@ -81,7 +121,7 @@ fn main() {
         .manage(state::AppState::default())
         .manage(sidecar::SidecarRuntime::default())
         .manage(tray::TrayState::default())
-        .invoke_handler(tauri::generate_handler![get_app_state, set_hotkey])
+        .invoke_handler(tauri::generate_handler![get_app_state, set_hotkey, set_asr_engine])
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -94,8 +134,10 @@ fn main() {
         .setup(|app| {
             let handle = app.handle().clone();
             let startup_hotkey = settings::load_hotkey(&handle);
+            let startup_asr_engine = settings::load_asr_engine(&handle);
             debug_log::append("startup begin");
             state::seed_hotkey(&handle, startup_hotkey.clone());
+            state::seed_asr_engine(&handle, startup_asr_engine);
 
             app.global_shortcut()
                 .register(startup_hotkey.as_str())

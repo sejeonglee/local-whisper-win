@@ -18,6 +18,7 @@ export interface DownloadProgress {
 export interface AppSnapshot {
   phase: AppPhase;
   hotkey: string;
+  engine: string | null;
   model: string | null;
   backend: string | null;
   message: string;
@@ -30,6 +31,7 @@ export interface AppSnapshot {
 export const defaultAppState: AppSnapshot = {
   phase: "starting",
   hotkey: "Ctrl+H",
+  engine: "whisper",
   model: null,
   backend: null,
   message: "Starting WhisperWindows...",
