@@ -1,0 +1,66 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod clipboard;
+mod sidecar;
+mod state;
+
+use tauri::{AppHandle, Manager};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+#[tauri::command]
+fn get_app_state(app: AppHandle) -> state::AppSnapshot {
+    state::snapshot(&app)
+}
+
+fn handle_hotkey(app: &AppHandle) {
+    match state::snapshot(app).phase {
+        state::AppPhase::Ready => {
+            let _ = state::set_listening_requested(app);
+            if let Err(err) = sidecar::send_command(app, "start_recording") {
+                let _ = state::set_error(app, err);
+            }
+        }
+        state::AppPhase::Listening => {
+            let _ = state::set_transcribing_pending(app);
+            if let Err(err) = sidecar::send_command(app, "stop_recording") {
+                let _ = state::set_error(app, err);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn main() {
+    tauri::Builder::default()
+        .manage(state::AppState::default())
+        .manage(sidecar::SidecarRuntime::default())
+        .invoke_handler(tauri::generate_handler![get_app_state])
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        handle_hotkey(app);
+                    }
+                })
+                .build(),
+        )
+        .setup(|app| {
+            let shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyH);
+            let handle = app.handle().clone();
+
+            app.global_shortcut().register(shortcut)?;
+
+            if let Err(err) = state::broadcast(&handle) {
+                return Err(std::io::Error::other(err).into());
+            }
+            if let Err(err) = sidecar::spawn_sidecar(&handle) {
+                return Err(std::io::Error::other(err).into());
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+            }
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
