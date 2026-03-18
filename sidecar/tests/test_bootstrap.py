@@ -25,6 +25,18 @@ class BootstrapTests(unittest.TestCase):
             marker = cache_marker_path(Path(temp_dir))
             self.assertIn(MODEL_NAME, str(marker))
 
+    def test_qwen_live_runtime_resolves_primary_model_on_8gb_gpu(self) -> None:
+        with patch.object(bootstrap, "detect_qwen_gpu_memory", return_value=8 * 1024 * 1024 * 1024):
+            selection = bootstrap.resolve_live_selection(bootstrap.ASR_ENGINE_QWEN3)
+
+        self.assertEqual(selection.model, bootstrap.QWEN_PRIMARY_MODEL_NAME)
+
+    def test_qwen_live_runtime_resolves_fallback_model_below_8gb(self) -> None:
+        with patch.object(bootstrap, "detect_qwen_gpu_memory", return_value=6 * 1024 * 1024 * 1024):
+            selection = bootstrap.resolve_live_selection(bootstrap.ASR_ENGINE_QWEN3)
+
+        self.assertEqual(selection.model, bootstrap.QWEN_FALLBACK_MODEL_NAME)
+
     def test_live_runtime_skips_download_when_model_is_already_cached(self) -> None:
         events: list[str] = []
 
@@ -40,15 +52,19 @@ class BootstrapTests(unittest.TestCase):
 
         self.assertEqual(events, ["starting", "loading_model"])
         self.assertFalse(result.stub)
-        self.assertEqual(result.model_path, cache_root / MODEL_NAME)
-        cached.assert_called_once_with(cache_root)
+        self.assertEqual(result.model_path, cache_root / bootstrap.ASR_ENGINE_WHISPER / MODEL_NAME)
+        cached.assert_called_once_with(
+            cache_root,
+            engine=bootstrap.ASR_ENGINE_WHISPER,
+            model_name=MODEL_NAME,
+        )
         download.assert_not_called()
 
     def test_live_runtime_downloads_before_loading_when_cache_is_missing(self) -> None:
         events: list[str] = []
 
-        def fake_download(emit_event, _cache_dir, model_name=MODEL_NAME) -> None:
-            emit_event("model_download_started", model=model_name, total_bytes=42)
+        def fake_download(emit_event, _cache_dir, selection) -> None:
+            emit_event("model_download_started", engine=selection.engine, model=selection.model, total_bytes=42)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             cache_root = Path(temp_dir)
@@ -62,7 +78,7 @@ class BootstrapTests(unittest.TestCase):
 
         self.assertEqual(events, ["starting", "model_download_started", "loading_model"])
         self.assertFalse(result.stub)
-        self.assertEqual(result.model_path, cache_root / MODEL_NAME)
+        self.assertEqual(result.model_path, cache_root / bootstrap.ASR_ENGINE_WHISPER / MODEL_NAME)
         download.assert_called_once()
 
     def test_download_live_model_emits_byte_progress_from_snapshot_download(self) -> None:
@@ -90,14 +106,33 @@ class BootstrapTests(unittest.TestCase):
             bootstrap.download_live_model(
                 lambda event, **payload: events.append((event, payload)),
                 Path("cache"),
+                bootstrap.ResolvedSelection(
+                    engine=bootstrap.ASR_ENGINE_WHISPER,
+                    model=MODEL_NAME,
+                ),
             )
 
         self.assertEqual(
             events[0],
-            ("model_download_started", {"model": MODEL_NAME, "total_bytes": 30}),
+            (
+                "model_download_started",
+                {
+                    "engine": bootstrap.ASR_ENGINE_WHISPER,
+                    "model": MODEL_NAME,
+                    "total_bytes": 30,
+                },
+            ),
         )
         self.assertIn(
-            ("model_download_progress", {"model": MODEL_NAME, "received_bytes": 10, "total_bytes": 30}),
+            (
+                "model_download_progress",
+                {
+                    "engine": bootstrap.ASR_ENGINE_WHISPER,
+                    "model": MODEL_NAME,
+                    "received_bytes": 10,
+                    "total_bytes": 30,
+                },
+            ),
             events,
         )
         self.assertEqual(events[-1][0], "model_download_progress")

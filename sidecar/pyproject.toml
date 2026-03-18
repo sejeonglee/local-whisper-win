@@ -11,7 +11,9 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "faster-whisper==1.2.1",
     "numpy==2.4.3",
+    "qwen-asr==0.0.6",
     "sounddevice==0.5.5",
+    "torch>=2.7,<2.9",
 ]
 
 [project.scripts]
