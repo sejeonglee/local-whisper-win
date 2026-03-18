@@ -47,6 +47,9 @@ pub fn paste_transcription(text: &str) -> Result<(), String> {
     set_text_clipboard(text)?;
 
     let paste_result = restore_focus(target).and_then(|_| send_ctrl_v());
+    if paste_result.is_ok() {
+        thread::sleep(Duration::from_millis(120));
+    }
     let restore_result = restore_clipboard(previous_clipboard.as_ref());
     clear_paste_target();
 
@@ -89,9 +92,28 @@ fn restore_clipboard(previous: Option<&IDataObject>) -> Result<(), String> {
     unsafe {
         match previous {
             Some(data) => {
-                OleSetClipboard(data).map_err(|err| format!("Failed to restore clipboard: {err}"))?;
-                OleFlushClipboard()
-                    .map_err(|err| format!("Failed to flush restored clipboard: {err}"))?;
+                let mut last_error = None;
+
+                for _ in 0..10 {
+                    match OleSetClipboard(data) {
+                        Ok(()) => match OleFlushClipboard() {
+                            Ok(()) => return Ok(()),
+                            Err(err) => {
+                                last_error =
+                                    Some(format!("Failed to flush restored clipboard: {err}"));
+                            }
+                        },
+                        Err(err) => {
+                            last_error = Some(format!("Failed to restore clipboard: {err}"));
+                        }
+                    }
+
+                    thread::sleep(Duration::from_millis(40));
+                }
+
+                return Err(last_error.unwrap_or_else(|| {
+                    "Failed to restore clipboard for an unknown reason.".to_string()
+                }));
             }
             None => {
                 with_open_clipboard(|| {
