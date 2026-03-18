@@ -38,18 +38,9 @@ pub struct SidecarEvent {
 }
 
 pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
-    let sidecar_root = sidecar_root();
+    let sidecar_root = sidecar_root(app)?;
     let mut command = build_sidecar_command(&sidecar_root);
-    let python_path = sidecar_root.join("src");
-    let existing_python_path = env::var_os("PYTHONPATH")
-        .map(PathBuf::from)
-        .map(|path| path.display().to_string())
-        .unwrap_or_default();
-    let merged_python_path = if existing_python_path.is_empty() {
-        python_path.display().to_string()
-    } else {
-        format!("{};{}", python_path.display(), existing_python_path)
-    };
+    let merged_python_path = merged_python_path(&sidecar_root)?;
 
     command
         .current_dir(&sidecar_root)
@@ -59,6 +50,7 @@ pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    apply_bundled_python_env(&mut command, &sidecar_root)?;
     debug_log::append(format!("spawning sidecar in {}", sidecar_root.display()));
 
     let mut child = command
@@ -133,8 +125,28 @@ pub fn send_command(app: &AppHandle, cmd: &str) -> Result<(), String> {
         .map_err(|err| format!("Failed to flush sidecar command: {err}"))
 }
 
-fn sidecar_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sidecar")
+fn sidecar_root(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let bundled = resource_dir.join("sidecar");
+        if bundled.join("src").exists() {
+            debug_log::append(format!("using bundled sidecar root {}", bundled.display()));
+            return Ok(bundled);
+        }
+    }
+
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sidecar");
+    if workspace.join("src").exists() {
+        debug_log::append(format!(
+            "using workspace sidecar root {}",
+            workspace.display()
+        ));
+        return Ok(workspace);
+    }
+
+    Err(format!(
+        "Couldn't locate sidecar resources. Expected bundled or workspace sidecar near {}.",
+        workspace.display()
+    ))
 }
 
 fn build_sidecar_command(sidecar_root: &Path) -> Command {
@@ -152,6 +164,7 @@ fn build_sidecar_command(sidecar_root: &Path) -> Command {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
+        .or_else(|| bundled_python(sidecar_root))
         .or_else(|| workspace_venv_python(sidecar_root))
         .unwrap_or_else(|| PathBuf::from("python"));
     let mut command = Command::new(program);
@@ -159,13 +172,84 @@ fn build_sidecar_command(sidecar_root: &Path) -> Command {
     command
 }
 
+fn bundled_python(sidecar_root: &Path) -> Option<PathBuf> {
+    let candidates = [
+        sidecar_root.join("python").join("python.exe"),
+        sidecar_root.join("python").join("bin").join("python"),
+    ];
+
+    candidates.into_iter().find(|candidate| candidate.exists())
+}
+
 fn workspace_venv_python(sidecar_root: &Path) -> Option<PathBuf> {
     let candidates = [
-        sidecar_root.join(".venv").join("Scripts").join("python.exe"),
+        sidecar_root
+            .join(".venv")
+            .join("Scripts")
+            .join("python.exe"),
         sidecar_root.join(".venv").join("bin").join("python"),
     ];
 
     candidates.into_iter().find(|candidate| candidate.exists())
+}
+
+fn bundled_site_packages(sidecar_root: &Path) -> Option<PathBuf> {
+    let candidates = [
+        sidecar_root.join("site-packages"),
+        sidecar_root
+            .join("python")
+            .join("Lib")
+            .join("site-packages"),
+        sidecar_root
+            .join("python")
+            .join("lib")
+            .join("python3.12")
+            .join("site-packages"),
+    ];
+
+    candidates.into_iter().find(|candidate| candidate.exists())
+}
+
+fn merged_python_path(sidecar_root: &Path) -> Result<std::ffi::OsString, String> {
+    let mut entries = vec![sidecar_root.join("src")];
+
+    if let Some(site_packages) = bundled_site_packages(sidecar_root) {
+        entries.push(site_packages);
+    }
+
+    if let Some(existing) = env::var_os("PYTHONPATH") {
+        entries.extend(env::split_paths(&existing));
+    }
+
+    env::join_paths(entries).map_err(|err| format!("Failed to construct PYTHONPATH: {err}"))
+}
+
+fn apply_bundled_python_env(command: &mut Command, sidecar_root: &Path) -> Result<(), String> {
+    let Some(python_root) =
+        bundled_python(sidecar_root).and_then(|python| python.parent().map(PathBuf::from))
+    else {
+        return Ok(());
+    };
+
+    let mut path_entries = vec![python_root.clone()];
+    let scripts_dir = python_root.join("Scripts");
+    if scripts_dir.exists() {
+        path_entries.push(scripts_dir);
+    }
+    if let Some(existing) = env::var_os("PATH") {
+        path_entries.extend(env::split_paths(&existing));
+    }
+
+    let merged_path =
+        env::join_paths(path_entries).map_err(|err| format!("Failed to construct PATH: {err}"))?;
+    command.env("PYTHONHOME", &python_root);
+    command.env("PATH", merged_path);
+    debug_log::append(format!(
+        "configured bundled python runtime {}",
+        python_root.display()
+    ));
+
+    Ok(())
 }
 
 fn spawn_stdout_thread(app: AppHandle, stdout: ChildStdout) {
@@ -232,7 +316,10 @@ fn handle_stdout_line(app: &AppHandle, line: &str) {
         Ok(event) => {
             if event.event == "transcription" {
                 if let Some(text) = event.text.as_deref() {
-                    debug_log::append(format!("attempting paste of {} chars", text.chars().count()));
+                    debug_log::append(format!(
+                        "attempting paste of {} chars",
+                        text.chars().count()
+                    ));
                     if let Err(err) = clipboard::paste_transcription(text) {
                         debug_log::append(format!("paste failed: {err}"));
                         let _ = state::set_error(app, err);

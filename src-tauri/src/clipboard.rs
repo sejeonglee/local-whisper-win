@@ -66,9 +66,9 @@ pub fn paste_transcription(text: &str) -> Result<(), String> {
         (Ok(()), Ok(())) => Ok(()),
         (Err(err), Ok(())) => Err(err),
         (Ok(()), Err(err)) => Err(err),
-        (Err(paste_err), Err(restore_err)) => {
-            Err(format!("{paste_err} Clipboard restoration also failed: {restore_err}"))
-        }
+        (Err(paste_err), Err(restore_err)) => Err(format!(
+            "{paste_err} Clipboard restoration also failed: {restore_err}"
+        )),
     }
 }
 
@@ -85,15 +85,13 @@ fn load_paste_target() -> Option<HWND> {
 
 fn snapshot_clipboard() -> Result<Option<IDataObject>, String> {
     unsafe {
-        OleGetClipboard()
-            .map(Some)
-            .or_else(|err| {
-                if clipboard_is_empty_error(&err.to_string()) {
-                    Ok(None)
-                } else {
-                    Err(format!("Failed to snapshot clipboard: {err}"))
-                }
-            })
+        OleGetClipboard().map(Some).or_else(|err| {
+            if clipboard_is_empty_error(&err.to_string()) {
+                Ok(None)
+            } else {
+                Err(format!("Failed to snapshot clipboard: {err}"))
+            }
+        })
     }
 }
 
@@ -178,7 +176,10 @@ fn restore_focus(target: Option<HWND>) -> Result<(), String> {
 
     unsafe {
         if !IsWindow(Some(target)).as_bool() || !IsWindowVisible(target).as_bool() {
-            debug_log::append(format!("restore_focus skipped: target hwnd={} invalid", target.0 as isize));
+            debug_log::append(format!(
+                "restore_focus skipped: target hwnd={} invalid",
+                target.0 as isize
+            ));
             return Ok(());
         }
 
@@ -189,7 +190,10 @@ fn restore_focus(target: Option<HWND>) -> Result<(), String> {
                 .map_err(|err| format!("Failed to restore target window focus: {err}"))?;
             thread::sleep(Duration::from_millis(60));
         }
-        debug_log::append(format!("restore_focus complete target hwnd={}", target.0 as isize));
+        debug_log::append(format!(
+            "restore_focus complete target hwnd={}",
+            target.0 as isize
+        ));
     }
 
     Ok(())

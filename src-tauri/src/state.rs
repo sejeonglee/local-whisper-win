@@ -76,7 +76,8 @@ pub fn snapshot(app: &AppHandle) -> AppSnapshot {
 pub fn broadcast(app: &AppHandle) -> Result<(), String> {
     let current = snapshot(app);
     tray::sync(app, &current)?;
-    app.emit(APP_STATE_CHANGED, current).map_err(|err| err.to_string())
+    app.emit(APP_STATE_CHANGED, current)
+        .map_err(|err| err.to_string())
 }
 
 pub fn set_listening_requested(app: &AppHandle) -> Result<(), String> {
@@ -167,7 +168,10 @@ pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), 
         "transcription" => {
             state.phase = AppPhase::Ready;
             state.message = if let Some(text) = event.text.as_deref() {
-                format!("Pasted {} characters and restored the clipboard.", text.chars().count())
+                format!(
+                    "Pasted {} characters and restored the clipboard.",
+                    text.chars().count()
+                )
             } else {
                 format!("Ready for dictation. Press {} to toggle.", HOTKEY_LABEL)
             };
