@@ -14,14 +14,16 @@
       {
         "label": "main",
         "title": "WhisperWindows",
-        "width": 520,
-        "height": 360,
-        "resizable": false,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
+        "width": 1120,
+        "height": 760,
+        "minWidth": 900,
+        "minHeight": 620,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
         "visible": false,
-        "skipTaskbar": true
+        "skipTaskbar": false
       }
     ]
   },
