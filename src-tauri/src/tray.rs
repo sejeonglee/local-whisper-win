@@ -106,7 +106,6 @@ pub fn show_overlay(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "Main overlay window is unavailable.".to_string())?;
-    window.set_focusable(false).map_err(|err| err.to_string())?;
     window.show().map_err(|err| err.to_string())
 }
 

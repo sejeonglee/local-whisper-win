@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { AppSnapshot } from "../lib/app-state";
 import { formatBytes } from "../lib/app-state";
 
@@ -5,19 +6,25 @@ interface StatusOverlayProps {
   state: AppSnapshot;
 }
 
+type DashboardTab = "overview" | "runtime" | "product";
+
 interface PhaseContent {
   badge: string;
   title: string;
   summary: string;
-  dockLabel: string;
-  dockHint: string;
+  focus: string;
   tone: "calm" | "active" | "working" | "error";
 }
 
-interface BlueprintItem {
+interface RoadmapItem {
   stage: "Now" | "Next" | "Later";
   title: string;
   description: string;
+}
+
+interface ToneSample {
+  app: string;
+  text: string;
 }
 
 interface DictionaryEntry {
@@ -28,77 +35,67 @@ interface DictionaryEntry {
 const phaseContent: Record<AppSnapshot["phase"], PhaseContent> = {
   starting: {
     badge: "Booting",
-    title: "Building your local voice layer",
-    summary:
-      "WhisperWindows is shifting from a plain status panel to a Typeless-inspired writing surface built for local GPU inference.",
-    dockLabel: "Bootstrapping the local runtime",
-    dockHint: "Warm the model once, then keep the voice loop compact.",
+    title: "WhisperWindows dashboard",
+    summary: "The app is preparing the local dictation loop and wiring the sidecar into the desktop shell.",
+    focus: "Startup and tray readiness",
     tone: "calm",
   },
   downloading_model: {
     badge: "Caching",
-    title: "Preparing the on-device model",
-    summary:
-      "Typeless sells instant polish. For WhisperWindows, the equivalent is caching the local model so future dictation stays fast and private.",
-    dockLabel: "Downloading the local model",
-    dockHint: "First run is setup. Later runs should feel immediate.",
+    title: "WhisperWindows dashboard",
+    summary: "The first launch is downloading the local model so later runs stay fast and private.",
+    focus: "Model download progress",
     tone: "working",
   },
   loading_model: {
     badge: "Loading",
-    title: "Keeping the model warm",
-    summary:
-      "The goal is the same seamless voice loop, but backed by Whisper and local hardware instead of a cloud round-trip.",
-    dockLabel: "Loading Whisper into memory",
-    dockHint: "Once the runtime is warm, the UI can stay lightweight.",
+    title: "WhisperWindows dashboard",
+    summary: "The model is being loaded into memory so the voice loop can respond without a cold start.",
+    focus: "Runtime warmup",
     tone: "working",
   },
   ready: {
     badge: "Ready",
-    title: "Speak, polish, paste",
-    summary:
-      "This project should feel like a cross-app writing layer: hit the hotkey, speak naturally, and let local models turn it into intentional writing.",
-    dockLabel: "Ready for dictation",
-    dockHint: "Press the hotkey once to start and again to stop.",
+    title: "WhisperWindows dashboard",
+    summary: "The app is ready to listen, transcribe locally, paste into the last focused app, and restore the clipboard.",
+    focus: "Fast dictation loop",
     tone: "active",
   },
   listening_requested: {
     badge: "Arming",
-    title: "Opening the recorder without taking over",
-    summary:
-      "A big part of the Typeless feel is that the recorder shows up fast and gets out of the way. WhisperWindows should keep that same rhythm.",
-    dockLabel: "Microphone handshake in progress",
-    dockHint: "Stay in the app you were already using.",
+    title: "WhisperWindows dashboard",
+    summary: "The shell has accepted the hotkey and is waiting for the sidecar to confirm microphone capture.",
+    focus: "Recorder handshake",
     tone: "active",
   },
   listening: {
     badge: "Listening",
-    title: "Capture the sentence, not the keyboard",
-    summary:
-      "The UI should feel like a tiny writing instrument, not a dashboard. Speak in Korean, English, or mixed phrases and keep moving.",
-    dockLabel: "Listening for your next sentence",
-    dockHint: "The best surface here is compact, ambient, and cross-app.",
+    title: "WhisperWindows dashboard",
+    summary: "WhisperWindows is capturing audio and keeping the rest of the workflow ready for a quick stop-and-paste.",
+    focus: "Capture in progress",
     tone: "active",
   },
   transcribing: {
-    badge: "Polishing",
-    title: "Turning raw speech into usable writing",
-    summary:
-      "Raw transcription is only the start. The next layer is local cleanup for filler removal, punctuation, and app-aware tone.",
-    dockLabel: "Transcribing and cleaning locally",
-    dockHint: "This is where local LLM cleanup will make the biggest difference.",
+    badge: "Transcribing",
+    title: "WhisperWindows dashboard",
+    summary: "Audio capture is done and the sidecar is turning it into local text for paste-back delivery.",
+    focus: "Local transcription",
     tone: "working",
   },
   error: {
     badge: "Blocked",
-    title: "The voice loop needs attention",
-    summary:
-      "Fast, seamless UX depends on reliable audio, sidecar, and paste behavior. Failures should be obvious and recoverable without guesswork.",
-    dockLabel: "Recovery needed before dictation",
-    dockHint: "Treat error handling as part of the product feel, not an edge case.",
+    title: "WhisperWindows dashboard",
+    summary: "Something in the sidecar, clipboard, or microphone path needs attention before the loop can recover.",
+    focus: "Recovery and diagnostics",
     tone: "error",
   },
 };
+
+const tabs: { id: DashboardTab; label: string; hint: string }[] = [
+  { id: "overview", label: "Overview", hint: "Status, workflow, and visible surfaces" },
+  { id: "runtime", label: "Runtime", hint: "Model, pipeline, hotkey, and diagnostics" },
+  { id: "product", label: "Product", hint: "Roadmap, vocabulary, and app-aware ideas" },
+];
 
 const workspaceApps = [
   "Slack",
@@ -111,7 +108,7 @@ const workspaceApps = [
   "WhatsApp",
 ];
 
-const toneSamples = [
+const toneSamples: ToneSample[] = [
   { app: "Slack", text: "Looks good." },
   { app: "Email", text: "Looks good," },
   { app: "Chat", text: "Looks good!" },
@@ -126,40 +123,72 @@ const dictionaryEntries: DictionaryEntry[] = [
   { label: "Ctrl+H", source: "manual" },
 ];
 
-function getBlueprint(): BlueprintItem[] {
-  return [
-    {
-      stage: "Now",
-      title: "Live voice-state overlay",
-      description:
-        "Keep startup, warmup, listening, transcription, and error feedback visible without pulling the user out of the app they are already in.",
-    },
-    {
-      stage: "Next",
-      title: "Local cleanup pass",
-      description:
-        "Add filler removal, repetition cleanup, and punctuation shaping after Whisper output so the result reads like deliberate writing instead of raw dictation.",
-    },
-    {
-      stage: "Next",
-      title: "Personal dictionary",
-      description:
-        "Store names, jargon, and bilingual terms locally so the system learns project language without sending it to a remote service.",
-    },
-    {
-      stage: "Later",
-      title: "Selected-text actions",
-      description:
-        "Use a local LLM to rewrite, shorten, translate, summarize, or answer questions about highlighted text inside the user's current app.",
-    },
-    {
-      stage: "Later",
-      title: "App-aware tone",
-      description:
-        "Steer cleanup differently for chat, email, docs, issue trackers, or coding tools while keeping the recorder surface small and consistent.",
-    },
-  ];
-}
+const roadmap: RoadmapItem[] = [
+  {
+    stage: "Now",
+    title: "Voice-state dashboard",
+    description: "Keep startup, listening, transcription, and recovery visible without forcing the user into a terminal.",
+  },
+  {
+    stage: "Next",
+    title: "Configurable hotkey",
+    description: "Let the user store a preferred global shortcut and re-register it without rebuilding the app.",
+  },
+  {
+    stage: "Next",
+    title: "Local cleanup pass",
+    description: "Shape punctuation and remove filler words after Whisper so the result reads more intentionally.",
+  },
+  {
+    stage: "Later",
+    title: "Personal dictionary",
+    description: "Capture names, jargon, and bilingual terms locally so repeated dictation gets more reliable.",
+  },
+  {
+    stage: "Later",
+    title: "Selected-text actions",
+    description: "Add local rewrite, summarize, and translate actions on top of the same desktop shell.",
+  },
+];
+
+const hotkeyRollout = [
+  {
+    title: "Persist the selected shortcut",
+    description: "Store a user-picked combination in app settings instead of hard-coding Ctrl+H into Rust state.",
+  },
+  {
+    title: "Re-register it at runtime",
+    description: "When the user saves a new shortcut, unregister the old one, validate the new one, then broadcast it to the UI.",
+  },
+  {
+    title: "Keep a safe fallback",
+    description: "If registration fails or the shortcut is reserved, revert to the last known good shortcut and show an error badge.",
+  },
+];
+
+const visibleWindows = [
+  {
+    title: "Dashboard window",
+    description: "The main desktop overview for current status, runtime facts, and product direction.",
+  },
+  {
+    title: "Tray icon",
+    description: "A resident tray entry keeps the app available even when the dashboard is hidden.",
+  },
+  {
+    title: "Runtime states",
+    description: "Download, loading, listening, transcribing, and error states stay in the same dashboard instead of separate popups.",
+  },
+];
+
+const localFirstTraits = [
+  "Korean",
+  "English",
+  "Mixed speech",
+  "Clipboard restore",
+  "Local model cache",
+  "Future local LLM cleanup",
+];
 
 function getPipeline(state: AppSnapshot) {
   const progress = state.downloadProgress;
@@ -173,17 +202,15 @@ function getPipeline(state: AppSnapshot) {
     },
     {
       title: "Listen from the global hotkey",
-      description: `Press ${state.hotkey} to start capturing and press it again to stop.`,
+      description: `Press ${state.hotkey} once to start capture and again to stop.`,
     },
     {
-      title: "Transcribe and refine on-device",
-      description:
-        "Whisper handles speech-to-text, then a local cleanup layer can remove filler words and shape punctuation.",
+      title: "Transcribe locally",
+      description: "The Python sidecar handles audio capture, Whisper inference, and ready/error events.",
     },
     {
-      title: "Paste and restore the clipboard",
-      description:
-        "Deliver text back into the previously focused app while preserving earlier clipboard formats.",
+      title: "Paste and restore",
+      description: "Rust pastes into the last focused app and then restores the previous clipboard contents.",
     },
   ];
 }
@@ -213,27 +240,62 @@ function formatUpdatedAt(updatedAt: number): string {
   return new Date(updatedAt).toLocaleTimeString();
 }
 
+function formatProgress(state: AppSnapshot): string {
+  const progress = state.downloadProgress;
+  if (!progress) {
+    return "Model cache is ready or already reused.";
+  }
+
+  return `${progress.percent ?? 0}% cached (${formatBytes(progress.receivedBytes)} / ${formatBytes(progress.totalBytes)})`;
+}
+
 export function StatusOverlay({ state }: StatusOverlayProps) {
+  const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
+
+  useEffect(() => {
+    if (
+      state.phase === "downloading_model" ||
+      state.phase === "loading_model" ||
+      state.phase === "error"
+    ) {
+      setActiveTab("runtime");
+    }
+  }, [state.phase]);
+
   const meta = phaseContent[state.phase];
   const progress = state.downloadProgress;
-  const blueprint = getBlueprint();
   const pipeline = getPipeline(state);
   const activePipelineIndex = getActivePipelineIndex(state.phase);
 
   return (
     <main className={`shell shell--${state.phase}`}>
-      <section className="experience">
-        <section className="hero">
-          <div className="hero__copy">
-            <div className="eyebrow">Typeless-inspired local-first dictation</div>
-            <h1>{meta.title}</h1>
-            <p className="hero__summary">{meta.summary}</p>
+      <section className="dashboard">
+        <header className="dashboard__header">
+          <div className="eyebrow">Local-first Windows dictation</div>
 
-            <div className="hero__metrics">
-              <article className="metric-card">
-                <span>Loop</span>
-                <strong>Speak {"->"} clean {"->"} paste</strong>
-              </article>
+          <div className="dashboard__headline">
+            <div>
+              <h1>{meta.title}</h1>
+              <p className="dashboard__summary">{meta.summary}</p>
+            </div>
+
+            <div className="dashboard__chips">
+              <span className={`phase-badge phase-badge--${meta.tone}`}>{meta.badge}</span>
+              <span className="hotkey-badge">{state.hotkey}</span>
+            </div>
+          </div>
+        </header>
+
+        <section className="hero-grid">
+          <article className="panel panel--hero">
+            <div className="panel__eyebrow">Current loop</div>
+            <h2>{state.message}</h2>
+            <p className="panel__copy">
+              Focus right now: {meta.focus}. The dashboard is grouped so the most useful status stays visible without
+              needing a long scroll.
+            </p>
+
+            <div className="metric-grid">
               <article className="metric-card">
                 <span>Runtime</span>
                 <strong>{state.backend ?? "Preflight"}</strong>
@@ -242,46 +304,11 @@ export function StatusOverlay({ state }: StatusOverlayProps) {
                 <span>Model</span>
                 <strong>{state.model ?? "large-v3-turbo"}</strong>
               </article>
+              <article className="metric-card">
+                <span>Updated</span>
+                <strong>{formatUpdatedAt(state.updatedAt)}</strong>
+              </article>
             </div>
-
-            <div className="app-strip" aria-label="Target apps">
-              {workspaceApps.map((app) => (
-                <span key={app} className="app-strip__item">
-                  {app}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <aside className="status-card">
-            <div className="status-card__header">
-              <div>
-                <div className="section-label">Session</div>
-                <h2>{meta.badge}</h2>
-              </div>
-              <div className={`phase-badge phase-badge--${meta.tone}`}>{state.hotkey}</div>
-            </div>
-
-            <p className="status-card__message">{state.message}</p>
-
-            <dl className="status-grid">
-              <div>
-                <dt>Backend</dt>
-                <dd>{state.backend ?? "preflight"}</dd>
-              </div>
-              <div>
-                <dt>Bootstrap</dt>
-                <dd>{state.isStubBootstrap ? "Scaffold mode" : "Live runtime"}</dd>
-              </div>
-              <div>
-                <dt>Model</dt>
-                <dd>{state.model ?? "large-v3-turbo"}</dd>
-              </div>
-              <div>
-                <dt>Updated</dt>
-                <dd>{formatUpdatedAt(state.updatedAt)}</dd>
-              </div>
-            </dl>
 
             {progress ? (
               <div className="progress-card">
@@ -297,159 +324,334 @@ export function StatusOverlay({ state }: StatusOverlayProps) {
                 </p>
               </div>
             ) : null}
+          </article>
+
+          <article className="panel panel--session">
+            <div className="panel__eyebrow">Session</div>
+            <dl className="detail-grid">
+              <div>
+                <dt>Phase</dt>
+                <dd>{meta.badge}</dd>
+              </div>
+              <div>
+                <dt>Bootstrap</dt>
+                <dd>{state.isStubBootstrap ? "Scaffold mode" : "Live runtime"}</dd>
+              </div>
+              <div>
+                <dt>Hotkey</dt>
+                <dd>{state.hotkey}</dd>
+              </div>
+              <div>
+                <dt>Cache</dt>
+                <dd>{formatProgress(state)}</dd>
+              </div>
+            </dl>
 
             {state.lastError ? <div className="error-banner">{state.lastError}</div> : null}
-          </aside>
+          </article>
         </section>
 
-        <section className="dock-zone" aria-label="Dictation controls">
-          <div className="recorder-dock">
-            <div className="dock-orb dock-orb--muted">X</div>
-            <div className="dock-core">
-              <span>{meta.dockLabel}</span>
-              <div className={`wave wave--${meta.tone}`} aria-hidden="true">
-                <span />
-                <span />
-                <span />
-                <span />
-                <span />
-              </div>
-            </div>
-            <div className={`dock-orb dock-orb--${meta.tone}`}>OK</div>
-          </div>
-          <p className="dock-caption">{meta.dockHint}</p>
-        </section>
+        <nav className="tab-bar" aria-label="Dashboard sections">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              className={`tab-button ${activeTab === tab.id ? "tab-button--active" : ""}`}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <span>{tab.label}</span>
+              <small>{tab.hint}</small>
+            </button>
+          ))}
+        </nav>
 
-        <section className="board">
-          <article className="card card--wide">
-            <div className="card__header">
-              <div>
-                <div className="section-label">Blueprint</div>
-                <h3>Features to port from Typeless</h3>
-              </div>
-              <p className="card__intro">
-                The direction is clear: keep the seamless cross-app writing feel, but replace cloud dependence with
-                local models, local memory, and explicit clipboard-safe delivery.
-              </p>
-            </div>
-
-            <div className="feature-list">
-              {blueprint.map((item) => (
-                <article key={item.title} className="feature-row">
-                  <div className={`stage-pill stage-pill--${item.stage.toLowerCase()}`}>{item.stage}</div>
+        <section className="tab-panel">
+          {activeTab === "overview" ? (
+            <div className="card-grid">
+              <article className="panel">
+                <div className="panel__header">
                   <div>
-                    <h4>{item.title}</h4>
-                    <p>{item.description}</p>
+                    <div className="section-label">Workflow</div>
+                    <h3>Voice loop at a glance</h3>
                   </div>
-                </article>
-              ))}
-            </div>
-          </article>
-
-          <article className="card">
-            <div className="card__header">
-              <div>
-                <div className="section-label">Context</div>
-                <h3>App-aware writing tones</h3>
-              </div>
-            </div>
-
-            <div className="tone-preview">
-              {toneSamples.map((sample) => (
-                <div key={sample.app} className="tone-sample">
-                  <div className="tone-sample__bubble">{sample.text}</div>
-                  <div className="tone-sample__app">{sample.app}</div>
                 </div>
-              ))}
-            </div>
 
-            <div className="app-chip-grid">
-              {workspaceApps.map((app) => (
-                <span key={app} className="app-chip-grid__item">
-                  {app}
-                </span>
-              ))}
-            </div>
-          </article>
+                <ol className="pipeline">
+                  {pipeline.map((step, index) => {
+                    const stateClass =
+                      activePipelineIndex === index
+                        ? "pipeline__item--active"
+                        : activePipelineIndex > index
+                          ? "pipeline__item--done"
+                          : "";
 
-          <article className="card">
-            <div className="card__header">
-              <div>
-                <div className="section-label">Vocabulary</div>
-                <h3>Local personal dictionary</h3>
-              </div>
-            </div>
+                    return (
+                      <li key={step.title} className={`pipeline__item ${stateClass}`}>
+                        <div className="pipeline__index">{index + 1}</div>
+                        <div>
+                          <h4>{step.title}</h4>
+                          <p>{step.description}</p>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </article>
 
-            <div className="dictionary-tabs" aria-hidden="true">
-              <span className="dictionary-tabs__item dictionary-tabs__item--active">All</span>
-              <span className="dictionary-tabs__item">Auto-added</span>
-              <span className="dictionary-tabs__item">Manual</span>
-            </div>
-
-            <div className="dictionary-grid">
-              {dictionaryEntries.map((entry) => (
-                <div key={entry.label} className="dictionary-item">
-                  <span className={`dictionary-item__marker dictionary-item__marker--${entry.source}`} />
-                  <span>{entry.label}</span>
+              <article className="panel">
+                <div className="panel__header">
+                  <div>
+                    <div className="section-label">Surfaces</div>
+                    <h3>What shows up in Windows</h3>
+                  </div>
                 </div>
-              ))}
+
+                <div className="stack-list">
+                  {visibleWindows.map((item) => (
+                    <article key={item.title} className="stack-list__item">
+                      <h4>{item.title}</h4>
+                      <p>{item.description}</p>
+                    </article>
+                  ))}
+                </div>
+              </article>
+
+              <article className="panel">
+                <div className="panel__header">
+                  <div>
+                    <div className="section-label">Targets</div>
+                    <h3>Cross-app handoff</h3>
+                  </div>
+                </div>
+
+                <p className="panel__copy">
+                  WhisperWindows is meant to stay lightweight and hand text back to the app you were already using.
+                </p>
+
+                <div className="pill-cloud">
+                  {workspaceApps.map((app) => (
+                    <span key={app} className="pill-cloud__item">
+                      {app}
+                    </span>
+                  ))}
+                </div>
+              </article>
+
+              <article className="panel">
+                <div className="panel__header">
+                  <div>
+                    <div className="section-label">Principles</div>
+                    <h3>Local-first by design</h3>
+                  </div>
+                </div>
+
+                <p className="panel__copy">
+                  The long-term direction is still the same: fast cross-app writing help, but with local inference,
+                  local cache reuse, and explicit clipboard safety.
+                </p>
+
+                <div className="pill-cloud">
+                  {localFirstTraits.map((item) => (
+                    <span key={item} className="pill-cloud__item">
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              </article>
             </div>
-          </article>
+          ) : null}
 
-          <article className="card">
-            <div className="card__header">
-              <div>
-                <div className="section-label">Pipeline</div>
-                <h3>How the local version should work</h3>
-              </div>
-            </div>
+          {activeTab === "runtime" ? (
+            <div className="card-grid">
+              <article className="panel">
+                <div className="panel__header">
+                  <div>
+                    <div className="section-label">Runtime</div>
+                    <h3>Model and shell facts</h3>
+                  </div>
+                </div>
 
-            <ol className="pipeline">
-              {pipeline.map((step, index) => {
-                const stateClass =
-                  activePipelineIndex === index
-                    ? "pipeline__item--active"
-                    : activePipelineIndex > index
-                      ? "pipeline__item--done"
-                      : "";
+                <dl className="detail-grid">
+                  <div>
+                    <dt>Backend</dt>
+                    <dd>{state.backend ?? "preflight"}</dd>
+                  </div>
+                  <div>
+                    <dt>Model</dt>
+                    <dd>{state.model ?? "large-v3-turbo"}</dd>
+                  </div>
+                  <div>
+                    <dt>Bootstrap</dt>
+                    <dd>{state.isStubBootstrap ? "Scaffold" : "Live"}</dd>
+                  </div>
+                  <div>
+                    <dt>Hotkey</dt>
+                    <dd>{state.hotkey}</dd>
+                  </div>
+                  <div>
+                    <dt>Updated</dt>
+                    <dd>{formatUpdatedAt(state.updatedAt)}</dd>
+                  </div>
+                  <div>
+                    <dt>Message</dt>
+                    <dd>{state.message}</dd>
+                  </div>
+                </dl>
+              </article>
 
-                return (
-                  <li key={step.title} className={`pipeline__item ${stateClass}`}>
-                    <div className="pipeline__index">{index + 1}</div>
-                    <div>
-                      <h4>{step.title}</h4>
-                      <p>{step.description}</p>
+              <article className="panel">
+                <div className="panel__header">
+                  <div>
+                    <div className="section-label">Cache</div>
+                    <h3>Model download status</h3>
+                  </div>
+                </div>
+
+                {progress ? (
+                  <>
+                    <div className="progress-card progress-card--inline">
+                      <div className="progress-card__header">
+                        <span>{progress.model ?? state.model ?? "large-v3-turbo"}</span>
+                        <span>{progress.percent ?? 0}%</span>
+                      </div>
+                      <div className="progress-bar" aria-hidden="true">
+                        <div className="progress-bar__fill" style={{ width: `${progress.percent ?? 0}%` }} />
+                      </div>
+                      <p className="progress-card__caption">
+                        {formatBytes(progress.receivedBytes)} of {formatBytes(progress.totalBytes)}
+                      </p>
                     </div>
-                  </li>
-                );
-              })}
-            </ol>
-          </article>
+                    <p className="panel__copy">
+                      First-run setup is in progress. Once cached, later launches should skip back to model load and then
+                      ready.
+                    </p>
+                  </>
+                ) : (
+                  <div className="callout">
+                    <strong>Cache looks ready.</strong>
+                    <span>The runtime is reusing a previously prepared model directory.</span>
+                  </div>
+                )}
+              </article>
 
-          <article className="card">
-            <div className="card__header">
-              <div>
-                <div className="section-label">Difference</div>
-                <h3>Local-first by design</h3>
-              </div>
+              <article className="panel">
+                <div className="panel__header">
+                  <div>
+                    <div className="section-label">Hotkey</div>
+                    <h3>How configurable hotkeys should land</h3>
+                  </div>
+                </div>
+
+                <div className="stack-list">
+                  {hotkeyRollout.map((item) => (
+                    <article key={item.title} className="stack-list__item">
+                      <h4>{item.title}</h4>
+                      <p>{item.description}</p>
+                    </article>
+                  ))}
+                </div>
+              </article>
+
+              <article className="panel">
+                <div className="panel__header">
+                  <div>
+                    <div className="section-label">Diagnostics</div>
+                    <h3>What to watch while iterating</h3>
+                  </div>
+                </div>
+
+                <div className="stack-list">
+                  <article className="stack-list__item">
+                    <h4>Clipboard and paste</h4>
+                    <p>Keep verifying focus restore, paste delivery, and clipboard rollback after every dictation cycle.</p>
+                  </article>
+                  <article className="stack-list__item">
+                    <h4>Audio lifecycle</h4>
+                    <p>Make sure the sidecar moves cleanly through listening, transcribing, empty-audio, and error states.</p>
+                  </article>
+                  <article className="stack-list__item">
+                    <h4>Packaging path</h4>
+                    <p>The release build now prefers bundled Python runtime resources instead of assuming the source tree.</p>
+                  </article>
+                </div>
+              </article>
             </div>
+          ) : null}
 
-            <div className="privacy-panel">
-              <p>
-                Typeless markets privacy. WhisperWindows can go further by making local inference, local history, and
-                local vocabulary the default architecture instead of a cloud-retention promise.
-              </p>
+          {activeTab === "product" ? (
+            <div className="card-grid">
+              <article className="panel panel--wide">
+                <div className="panel__header">
+                  <div>
+                    <div className="section-label">Roadmap</div>
+                    <h3>Grouped product direction</h3>
+                  </div>
+                </div>
 
-              <div className="language-cloud">
-                <span>Korean</span>
-                <span>English</span>
-                <span>Mixed speech</span>
-                <span>Offline cleanup</span>
-                <span>Clipboard restore</span>
-                <span>Local LLM prompts</span>
-              </div>
+                <div className="roadmap-list">
+                  {roadmap.map((item) => (
+                    <article key={item.title} className="roadmap-item">
+                      <div className={`stage-pill stage-pill--${item.stage.toLowerCase()}`}>{item.stage}</div>
+                      <div>
+                        <h4>{item.title}</h4>
+                        <p>{item.description}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </article>
+
+              <article className="panel">
+                <div className="panel__header">
+                  <div>
+                    <div className="section-label">Tone</div>
+                    <h3>App-aware writing previews</h3>
+                  </div>
+                </div>
+
+                <div className="tone-grid">
+                  {toneSamples.map((sample) => (
+                    <div key={sample.app} className="tone-card">
+                      <div className="tone-card__text">{sample.text}</div>
+                      <div className="tone-card__label">{sample.app}</div>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className="panel">
+                <div className="panel__header">
+                  <div>
+                    <div className="section-label">Vocabulary</div>
+                    <h3>Local dictionary seeds</h3>
+                  </div>
+                </div>
+
+                <div className="dictionary-grid">
+                  {dictionaryEntries.map((entry) => (
+                    <div key={entry.label} className="dictionary-item">
+                      <span className={`dictionary-item__marker dictionary-item__marker--${entry.source}`} />
+                      <span>{entry.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className="panel">
+                <div className="panel__header">
+                  <div>
+                    <div className="section-label">Positioning</div>
+                    <h3>Why this feels different</h3>
+                  </div>
+                </div>
+
+                <p className="panel__copy">
+                  The point is not just speech-to-text. It is a small Windows shell that keeps the cross-app loop
+                  visible while leaving model download, transcription, and future cleanup local.
+                </p>
+              </article>
             </div>
-          </article>
+          ) : null}
         </section>
       </section>
     </main>
