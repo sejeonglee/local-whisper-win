@@ -3,8 +3,9 @@
 mod clipboard;
 mod sidecar;
 mod state;
+mod tray;
 
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 #[tauri::command]
@@ -15,8 +16,10 @@ fn get_app_state(app: AppHandle) -> state::AppSnapshot {
 fn handle_hotkey(app: &AppHandle) {
     match state::snapshot(app).phase {
         state::AppPhase::Ready => {
+            clipboard::capture_paste_target();
             let _ = state::set_listening_requested(app);
             if let Err(err) = sidecar::send_command(app, "start_recording") {
+                clipboard::clear_paste_target();
                 let _ = state::set_error(app, err);
             }
         }
@@ -34,6 +37,7 @@ fn main() {
     tauri::Builder::default()
         .manage(state::AppState::default())
         .manage(sidecar::SidecarRuntime::default())
+        .manage(tray::TrayState::default())
         .invoke_handler(tauri::generate_handler![get_app_state])
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -53,11 +57,14 @@ fn main() {
             if let Err(err) = state::broadcast(&handle) {
                 return Err(std::io::Error::other(err).into());
             }
+            if let Err(err) = tray::setup(&handle) {
+                return Err(std::io::Error::other(err).into());
+            }
             if let Err(err) = sidecar::spawn_sidecar(&handle) {
                 return Err(std::io::Error::other(err).into());
             }
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
+            if let Err(err) = tray::show_overlay(&handle) {
+                return Err(std::io::Error::other(err).into());
             }
             Ok(())
         })

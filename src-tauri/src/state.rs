@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::sidecar::SidecarEvent;
+use crate::{sidecar::SidecarEvent, tray};
 
 pub const APP_STATE_CHANGED: &str = "app-state-changed";
 pub const HOTKEY_LABEL: &str = "Ctrl+H";
@@ -74,8 +74,9 @@ pub fn snapshot(app: &AppHandle) -> AppSnapshot {
 }
 
 pub fn broadcast(app: &AppHandle) -> Result<(), String> {
-    app.emit(APP_STATE_CHANGED, snapshot(app))
-        .map_err(|err| err.to_string())
+    let current = snapshot(app);
+    tray::sync(app, &current)?;
+    app.emit(APP_STATE_CHANGED, current).map_err(|err| err.to_string())
 }
 
 pub fn set_listening_requested(app: &AppHandle) -> Result<(), String> {
@@ -164,10 +165,7 @@ pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), 
         "transcription" => {
             state.phase = AppPhase::Ready;
             state.message = if let Some(text) = event.text.as_deref() {
-                format!(
-                    "Captured {} characters. Paste wiring is still scaffolded.",
-                    text.chars().count()
-                )
+                format!("Pasted {} characters and restored the clipboard.", text.chars().count())
             } else {
                 format!("Ready for dictation. Press {} to toggle.", HOTKEY_LABEL)
             };
@@ -202,6 +200,7 @@ fn update(app: &AppHandle, mutate: impl FnOnce(&mut AppSnapshot)) -> Result<(), 
         guard.clone()
     };
 
+    tray::sync(app, &next_snapshot)?;
     app.emit(APP_STATE_CHANGED, next_snapshot)
         .map_err(|err| err.to_string())
 }

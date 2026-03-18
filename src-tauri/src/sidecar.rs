@@ -12,6 +12,7 @@ use crate::{clipboard, state};
 #[derive(Default)]
 pub struct SidecarRuntime {
     stdin: Mutex<Option<ChildStdin>>,
+    shutdown_requested: Mutex<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -77,12 +78,29 @@ pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
         .stdin
         .lock()
         .expect("sidecar runtime poisoned") = Some(stdin);
+    *app.state::<SidecarRuntime>()
+        .shutdown_requested
+        .lock()
+        .expect("sidecar runtime poisoned") = false;
 
     spawn_stdout_thread(app.clone(), stdout);
     spawn_stderr_thread(stderr);
     spawn_wait_thread(app.clone(), child);
 
     Ok(())
+}
+
+pub fn request_shutdown(app: &AppHandle) -> Result<(), String> {
+    {
+        let runtime = app.state::<SidecarRuntime>();
+        let mut guard = runtime
+            .shutdown_requested
+            .lock()
+            .expect("sidecar runtime poisoned");
+        *guard = true;
+    }
+
+    send_command(app, "shutdown")
 }
 
 pub fn send_command(app: &AppHandle, cmd: &str) -> Result<(), String> {
@@ -161,12 +179,19 @@ fn spawn_stderr_thread(stderr: ChildStderr) {
 fn spawn_wait_thread(app: AppHandle, mut child: Child) {
     std::thread::spawn(move || {
         let status = child.wait();
+        let shutdown_requested = app
+            .state::<SidecarRuntime>()
+            .shutdown_requested
+            .lock()
+            .map(|guard| *guard)
+            .unwrap_or(false);
+
         if let Ok(mut guard) = app.state::<SidecarRuntime>().stdin.lock() {
             guard.take();
         }
 
         match status {
-            Ok(status) if !status.success() => {
+            Ok(status) if !status.success() && !shutdown_requested => {
                 let _ = state::set_error(&app, format!("Sidecar exited with status {status}."));
             }
             Ok(_) => {}
@@ -182,7 +207,10 @@ fn handle_stdout_line(app: &AppHandle, line: &str) {
         Ok(event) => {
             if event.event == "transcription" {
                 if let Some(text) = event.text.as_deref() {
-                    let _ = clipboard::paste_transcription(text);
+                    if let Err(err) = clipboard::paste_transcription(text) {
+                        let _ = state::set_error(app, err);
+                        return;
+                    }
                 }
             }
             let _ = state::apply_sidecar_event(app, &event);
