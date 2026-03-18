@@ -41,6 +41,7 @@ class WhisperTranscriber:
         cls,
         *,
         model_name: str = MODEL_NAME,
+        model_source: str | None = None,
         backend: str = BACKEND,
         compute_type: str = COMPUTE_TYPE,
         download_root: str | None = None,
@@ -54,7 +55,7 @@ class WhisperTranscriber:
             ) from exc
 
         model = WhisperModel(
-            model_name,
+            model_source or model_name,
             device=backend,
             compute_type=compute_type,
             download_root=download_root,

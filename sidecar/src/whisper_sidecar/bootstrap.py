@@ -30,6 +30,7 @@ class BootstrapResult:
     model: str = MODEL_NAME
     backend: str = BACKEND
     stub: bool = True
+    model_path: Path | None = None
 
 
 def default_cache_dir() -> Path:
@@ -68,26 +69,6 @@ def resolve_model_repository(model_name: str = MODEL_NAME) -> str:
     raise BootstrapError(f"Unsupported model repository lookup for '{model_name}'.")
 
 
-def faster_whisper_download_model(
-    model_name: str,
-    *,
-    cache_dir: Path,
-    local_files_only: bool,
-) -> str:
-    try:
-        from faster_whisper.utils import download_model
-    except ImportError as exc:  # pragma: no cover - environment dependent
-        raise BootstrapError(
-            "faster-whisper is required for live model bootstrap. Install sidecar dependencies first."
-        ) from exc
-
-    return download_model(
-        model_name,
-        cache_dir=str(cache_dir),
-        local_files_only=local_files_only,
-    )
-
-
 def huggingface_snapshot_download(**kwargs: object) -> object:
     try:
         from huggingface_hub import snapshot_download
@@ -99,24 +80,28 @@ def huggingface_snapshot_download(**kwargs: object) -> object:
     return snapshot_download(**kwargs)
 
 
+def live_model_dir(cache_dir: Path, model_name: str = MODEL_NAME) -> Path:
+    return cache_dir / model_name
+
+
+def has_required_model_files(model_dir: Path) -> bool:
+    required_files = [
+        model_dir / "config.json",
+        model_dir / "preprocessor_config.json",
+        model_dir / "model.bin",
+        model_dir / "tokenizer.json",
+    ]
+    return all(path.exists() for path in required_files) and any(model_dir.glob("vocabulary.*"))
+
+
 def is_live_model_cached(cache_dir: Path, model_name: str = MODEL_NAME) -> bool:
-    try:
-        faster_whisper_download_model(
-            model_name,
-            cache_dir=cache_dir,
-            local_files_only=True,
-        )
-        return True
-    except Exception as exc:  # pragma: no cover - dependency-specific failure modes
-        if exc.__class__.__name__ == "LocalEntryNotFoundError":
-            return False
-        raise BootstrapError(f"Failed to inspect local model cache: {exc}") from exc
+    return has_required_model_files(live_model_dir(cache_dir, model_name))
 
 
 def live_download_plan(cache_dir: Path, model_name: str = MODEL_NAME) -> tuple[int, bool]:
     plan = huggingface_snapshot_download(
         repo_id=resolve_model_repository(model_name),
-        cache_dir=str(cache_dir),
+        local_dir=str(live_model_dir(cache_dir, model_name)),
         allow_patterns=MODEL_ALLOW_PATTERNS,
         dry_run=True,
     )
@@ -183,21 +168,24 @@ def download_live_model(
 
     huggingface_snapshot_download(
         repo_id=resolve_model_repository(model_name),
-        cache_dir=str(cache_dir),
+        local_dir=str(live_model_dir(cache_dir, model_name)),
         allow_patterns=MODEL_ALLOW_PATTERNS,
         tqdm_class=DownloadProgressTqdm,
     )
 
 
-def ensure_live_model_ready(emit_event: Callable[..., None], cache_dir: Path) -> None:
+def ensure_live_model_ready(emit_event: Callable[..., None], cache_dir: Path) -> Path:
+    model_dir = live_model_dir(cache_dir)
     if not is_live_model_cached(cache_dir):
         download_live_model(emit_event, cache_dir)
+    return model_dir
 
 
 def ensure_model_ready(emit_event: Callable[..., None], cache_dir: Path | None = None) -> BootstrapResult:
     resolved_cache_dir = cache_dir or Path(os.environ.get("WHISPER_WINDOWS_MODEL_CACHE", default_cache_dir()))
     marker = cache_marker_path(resolved_cache_dir)
     selected_runtime = runtime_mode()
+    model_path: Path | None = None
 
     emit_event("starting")
 
@@ -227,10 +215,14 @@ def ensure_model_ready(emit_event: Callable[..., None], cache_dir: Path | None =
                 encoding="utf-8",
             )
     else:
-        ensure_live_model_ready(emit_event, resolved_cache_dir)
+        model_path = ensure_live_model_ready(emit_event, resolved_cache_dir)
 
     emit_event("loading_model", backend=BACKEND)
     if selected_runtime == "scaffold":
         time.sleep(0.1)
 
-    return BootstrapResult(cache_dir=resolved_cache_dir, stub=selected_runtime == "scaffold")
+    return BootstrapResult(
+        cache_dir=resolved_cache_dir,
+        stub=selected_runtime == "scaffold",
+        model_path=model_path,
+    )

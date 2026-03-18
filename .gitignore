@@ -19,6 +19,12 @@ __pycache__/
 *.pyo
 *.pyd
 .venv/
+.model-cache/
+.model-cache-live/
+.model-cache*/
+sidecar/.model-cache/
+sidecar/.model-cache-live/
+sidecar/.model-cache*/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

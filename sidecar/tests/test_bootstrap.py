@@ -40,6 +40,7 @@ class BootstrapTests(unittest.TestCase):
 
         self.assertEqual(events, ["starting", "loading_model"])
         self.assertFalse(result.stub)
+        self.assertEqual(result.model_path, cache_root / MODEL_NAME)
         cached.assert_called_once_with(cache_root)
         download.assert_not_called()
 
@@ -61,6 +62,7 @@ class BootstrapTests(unittest.TestCase):
 
         self.assertEqual(events, ["starting", "model_download_started", "loading_model"])
         self.assertFalse(result.stub)
+        self.assertEqual(result.model_path, cache_root / MODEL_NAME)
         download.assert_called_once()
 
     def test_download_live_model_emits_byte_progress_from_snapshot_download(self) -> None:

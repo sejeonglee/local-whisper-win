@@ -57,9 +57,8 @@ def create_runtime(bootstrap_result: BootstrapResult) -> tuple[Any, Any]:
             Recorder(),
             WhisperTranscriber.load(
                 model_name=bootstrap_result.model,
+                model_source=str(bootstrap_result.model_path) if bootstrap_result.model_path else None,
                 backend=bootstrap_result.backend,
-                download_root=str(bootstrap_result.cache_dir),
-                local_files_only=True,
             ),
         )
 

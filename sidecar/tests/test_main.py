@@ -32,7 +32,11 @@ class FakeTranscriber:
 
 class MainLoopTests(unittest.TestCase):
     def test_create_runtime_uses_bootstrap_cache_for_live_mode(self) -> None:
-        bootstrap_result = BootstrapResult(cache_dir=Path("cache"), stub=False)
+        bootstrap_result = BootstrapResult(
+            cache_dir=Path("cache"),
+            stub=False,
+            model_path=Path("cache") / "large-v3-turbo",
+        )
 
         with patch.object(sidecar_main, "Recorder", return_value="recorder") as recorder_cls:
             with patch.object(sidecar_main.WhisperTranscriber, "load", return_value="transcriber") as load:
@@ -42,9 +46,8 @@ class MainLoopTests(unittest.TestCase):
         recorder_cls.assert_called_once_with()
         load.assert_called_once_with(
             model_name=bootstrap_result.model,
+            model_source=str(bootstrap_result.model_path),
             backend=bootstrap_result.backend,
-            download_root=str(bootstrap_result.cache_dir),
-            local_files_only=True,
         )
 
     def test_create_runtime_uses_stub_runtime_when_bootstrap_result_is_stub(self) -> None:
