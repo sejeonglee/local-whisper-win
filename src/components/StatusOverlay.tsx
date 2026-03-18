@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import type { AppSnapshot } from "../lib/app-state";
 import { formatBytes } from "../lib/app-state";
 
 interface StatusOverlayProps {
   state: AppSnapshot;
+  onSaveHotkey: (hotkey: string) => Promise<string | null>;
 }
 
 type DashboardTab = "overview" | "runtime" | "product";
@@ -114,15 +115,6 @@ const toneSamples: ToneSample[] = [
   { app: "Chat", text: "Looks good!" },
 ];
 
-const dictionaryEntries: DictionaryEntry[] = [
-  { label: "WhisperWindows", source: "manual" },
-  { label: "large-v3-turbo", source: "auto" },
-  { label: "RTX 4050", source: "manual" },
-  { label: "CTranslate2", source: "manual" },
-  { label: "Korean + English", source: "auto" },
-  { label: "Ctrl+H", source: "manual" },
-];
-
 const roadmap: RoadmapItem[] = [
   {
     stage: "Now",
@@ -130,9 +122,9 @@ const roadmap: RoadmapItem[] = [
     description: "Keep startup, listening, transcription, and recovery visible without forcing the user into a terminal.",
   },
   {
-    stage: "Next",
+    stage: "Now",
     title: "Configurable hotkey",
-    description: "Let the user store a preferred global shortcut and re-register it without rebuilding the app.",
+    description: "Choose a preferred global shortcut in the runtime tab and have it apply immediately without a restart.",
   },
   {
     stage: "Next",
@@ -154,16 +146,23 @@ const roadmap: RoadmapItem[] = [
 const hotkeyRollout = [
   {
     title: "Persist the selected shortcut",
-    description: "Store a user-picked combination in app settings instead of hard-coding Ctrl+H into Rust state.",
+    description: "The selected combination is written to the app settings file so startup reuses it automatically.",
   },
   {
     title: "Re-register it at runtime",
-    description: "When the user saves a new shortcut, unregister the old one, validate the new one, then broadcast it to the UI.",
+    description: "Saving a new value unregisters the old shortcut, registers the new one, and updates the dashboard immediately.",
   },
   {
     title: "Keep a safe fallback",
-    description: "If registration fails or the shortcut is reserved, revert to the last known good shortcut and show an error badge.",
+    description: "If registration fails or the new shortcut is invalid, the app keeps the last known working shortcut active.",
   },
+];
+
+const presetHotkeys = [
+  "Ctrl+H",
+  "Ctrl+Shift+H",
+  "Ctrl+Alt+Space",
+  "Alt+F10",
 ];
 
 const visibleWindows = [
@@ -249,8 +248,12 @@ function formatProgress(state: AppSnapshot): string {
   return `${progress.percent ?? 0}% cached (${formatBytes(progress.receivedBytes)} / ${formatBytes(progress.totalBytes)})`;
 }
 
-export function StatusOverlay({ state }: StatusOverlayProps) {
+export function StatusOverlay({ state, onSaveHotkey }: StatusOverlayProps) {
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
+  const [hotkeyDraft, setHotkeyDraft] = useState(state.hotkey);
+  const [hotkeyNotice, setHotkeyNotice] = useState<string | null>(null);
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+  const [isSavingHotkey, setIsSavingHotkey] = useState(false);
 
   useEffect(() => {
     if (
@@ -262,10 +265,49 @@ export function StatusOverlay({ state }: StatusOverlayProps) {
     }
   }, [state.phase]);
 
+  useEffect(() => {
+    setHotkeyDraft(state.hotkey);
+  }, [state.hotkey]);
+
   const meta = phaseContent[state.phase];
   const progress = state.downloadProgress;
   const pipeline = getPipeline(state);
   const activePipelineIndex = getActivePipelineIndex(state.phase);
+  const dictionaryEntries: DictionaryEntry[] = [
+    { label: "WhisperWindows", source: "manual" },
+    { label: "large-v3-turbo", source: "auto" },
+    { label: "RTX 4050", source: "manual" },
+    { label: "CTranslate2", source: "manual" },
+    { label: "Korean + English", source: "auto" },
+    { label: state.hotkey, source: "manual" },
+  ];
+  const isHotkeyDirty = hotkeyDraft.trim() !== state.hotkey;
+
+  async function handleHotkeySubmit(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    if (!isHotkeyDirty || isSavingHotkey) {
+      return;
+    }
+
+    setIsSavingHotkey(true);
+    setHotkeyNotice(null);
+    setHotkeyError(null);
+    const error = await onSaveHotkey(hotkeyDraft);
+    setIsSavingHotkey(false);
+
+    if (error) {
+      setHotkeyError(error);
+      return;
+    }
+
+    setHotkeyNotice("Shortcut updated. The new global hotkey is active immediately.");
+  }
+
+  function applyHotkeyPreset(preset: string) {
+    setHotkeyDraft(preset);
+    setHotkeyError(null);
+    setHotkeyNotice(null);
+  }
 
   return (
     <main className={`shell shell--${state.phase}`}>
@@ -538,9 +580,52 @@ export function StatusOverlay({ state }: StatusOverlayProps) {
                 <div className="panel__header">
                   <div>
                     <div className="section-label">Hotkey</div>
-                    <h3>How configurable hotkeys should land</h3>
+                    <h3>Global shortcut controls</h3>
                   </div>
                 </div>
+
+                <form className="hotkey-form" onSubmit={handleHotkeySubmit}>
+                  <label className="hotkey-form__label" htmlFor="hotkey-input">
+                    Active shortcut
+                  </label>
+                  <div className="hotkey-form__row">
+                    <input
+                      id="hotkey-input"
+                      className="hotkey-input"
+                      value={hotkeyDraft}
+                      onChange={(event) => setHotkeyDraft(event.target.value)}
+                      placeholder="Ctrl+Shift+H"
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <button
+                      className="hotkey-save"
+                      type="submit"
+                      disabled={!isHotkeyDirty || isSavingHotkey}
+                    >
+                      {isSavingHotkey ? "Saving..." : "Apply"}
+                    </button>
+                  </div>
+                  <p className="hotkey-form__hint">
+                    Examples: Ctrl+Shift+H, Ctrl+Alt+Space, Alt+F10. Changes apply without restarting.
+                  </p>
+                </form>
+
+                <div className="preset-row" aria-label="Suggested hotkeys">
+                  {presetHotkeys.map((preset) => (
+                    <button
+                      key={preset}
+                      className={`preset-chip ${hotkeyDraft === preset ? "preset-chip--active" : ""}`}
+                      type="button"
+                      onClick={() => applyHotkeyPreset(preset)}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+
+                {hotkeyNotice ? <div className="callout callout--success">{hotkeyNotice}</div> : null}
+                {hotkeyError ? <div className="callout callout--error">{hotkeyError}</div> : null}
 
                 <div className="stack-list">
                   {hotkeyRollout.map((item) => (

@@ -11,6 +11,20 @@ function isTauriRuntime(): boolean {
 export default function App() {
   const [state, setState] = useState<AppSnapshot>(defaultAppState);
 
+  async function handleHotkeySave(hotkey: string): Promise<string | null> {
+    if (!isTauriRuntime()) {
+      return "Global hotkey changes only work in the desktop app runtime.";
+    }
+
+    try {
+      const snapshot = await invoke<AppSnapshot>("set_hotkey", { hotkey });
+      setState(snapshot);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
   useEffect(() => {
     if (!isTauriRuntime()) {
       return;
@@ -47,5 +61,5 @@ export default function App() {
     };
   }, []);
 
-  return <StatusOverlay state={state} />;
+  return <StatusOverlay state={state} onSaveHotkey={handleHotkeySave} />;
 }
