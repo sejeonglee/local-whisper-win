@@ -1,5 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "windows")]
+#[path = "clipboard_windows.rs"]
+mod clipboard;
+
+#[cfg(not(target_os = "windows"))]
+#[path = "clipboard_linux.rs"]
 mod clipboard;
 mod debug_log;
 mod settings;

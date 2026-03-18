@@ -35,6 +35,11 @@
     "resources": {
       "../sidecar/.python-runtime/": "sidecar/python/",
       "../sidecar/.venv/Lib/site-packages/": "sidecar/site-packages/",
+      "../sidecar/.venv/lib/site-packages/": "sidecar/site-packages/",
+      "../sidecar/.venv/lib/python3.12/site-packages/": "sidecar/site-packages/",
+      "../sidecar/.python-runtime/Lib/site-packages/": "sidecar/site-packages/",
+      "../sidecar/.python-runtime/lib/site-packages/": "sidecar/site-packages/",
+      "../sidecar/.python-runtime/lib/python3.12/site-packages/": "sidecar/site-packages/",
       "../sidecar/src/": "sidecar/src/"
     },
     "targets": "all"

@@ -2,7 +2,7 @@
 
 WhisperWindows is a Typeless-inspired, local-first Windows dictation app. It stays resident in the tray, listens for a global `Ctrl+H` hotkey, records a short utterance, runs local Whisper transcription through a Python sidecar, pastes the result back into the previously focused app, and restores the original clipboard contents.
 
-The current MVP is aimed at native Windows x86_64 with an NVIDIA GPU. The primary speech target is mixed Korean and English dictation.
+The current MVP originally targeted native Windows x86_64 with an NVIDIA GPU. Primary speech target is mixed Korean and English dictation.
 
 ## What Is Implemented
 
@@ -54,6 +54,44 @@ Notes:
 - `uv sync --project sidecar` creates `sidecar/.venv`, which is the Python environment used by the sidecar during development.
 - The app is designed to be validated on native Windows. WSL is fine for editing and some tests, but hotkey, tray, clipboard, audio, and packaging checks should happen on Windows itself.
 
+## Ubuntu/GNOME Development Setup
+
+Install:
+
+- Node.js 22
+- Rust toolchain with `rustup`
+- Python 3.12
+- `uv`
+- (For automatic paste support) `wl-clipboard` and `xdotool` (when available)
+
+Then from the project root:
+
+```bash
+npm install
+uv sync --project sidecar
+npm run tauri:dev
+```
+
+### Running on Linux
+
+Once dependencies are installed:
+
+```bash
+npm run tauri:dev
+```
+
+If you want to test clipboard + overlay behavior without downloading model files, use:
+
+```bash
+WHISPER_RUNTIME=scaffold WHISPER_WINDOWS_STUB_TEXT="안녕하세요" npm run tauri:dev
+```
+
+Notes:
+
+- The app should now run as a tray + floating overlay app on Ubuntu and attempt to use `xdotool` for automation.
+- If `xdotool` is not available, the sidecar still places the transcript into the clipboard so you can manually paste.
+- Clipboard paths and caches are Linux-aware (for Ubuntu: `${XDG_CACHE_HOME:-~/.cache}/WhisperWindows/models` by default).
+
 ## Useful Runtime Flags
 
 For a fast UI smoke test without downloading or loading the real model:
@@ -70,15 +108,15 @@ $env:WHISPER_WINDOWS_DEBUG_LOG = "$PWD\\tmp\\whisperwindows-debug.log"
 npm run tauri:dev
 ```
 
-## Packaging And Installer Build
+## Packaging And Build
 
-To build Windows installers:
+To build platform-native installers/distributions on the current OS:
 
 ```powershell
 npm run tauri:build
 ```
 
-That build now does three things:
+That command does:
 
 - Builds the React frontend
 - Stages a portable Python runtime into `sidecar/.python-runtime`
@@ -88,6 +126,9 @@ Expected artifacts:
 
 - `src-tauri/target/release/bundle/nsis/WhisperWindows_0.1.0_x64-setup.exe`
 - `src-tauri/target/release/bundle/msi/WhisperWindows_0.1.0_x64_en-US.msi`
+- On Ubuntu, the same command generates Linux bundle artifacts such as `.deb`/`.rpm`/`.appimage` depending on your toolchain.
+
+If `WHISPER_BACKEND` is set to `cpu` or `auto`, Ubuntu builds that do not have CUDA can still run transcription.
 
 If you want to smoke-test the packaged app layout without running the installer UI, you can also run:
 

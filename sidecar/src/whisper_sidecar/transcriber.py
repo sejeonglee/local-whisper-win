@@ -7,8 +7,8 @@ from typing import Any, Callable
 from .bootstrap import MODEL_NAME
 from .recorder import MIN_RECORDING_MS, RecordingResult
 
-BACKEND = "cuda"
-COMPUTE_TYPE = "int8_float16"
+BACKEND = os.environ.get("WHISPER_BACKEND", os.environ.get("WHISPER_WINDOWS_BACKEND", "auto")).strip().lower() or "auto"
+COMPUTE_TYPE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8_float16")
 
 
 class TranscriberError(RuntimeError):
@@ -18,7 +18,7 @@ class TranscriberError(RuntimeError):
 @dataclass(slots=True)
 class TranscriptionResult:
     text: str | None
-    backend: str = BACKEND
+    backend: str
     model: str = MODEL_NAME
 
 
@@ -54,14 +54,25 @@ class WhisperTranscriber:
                 "faster-whisper is required for live transcription. Install sidecar dependencies first."
             ) from exc
 
-        model = WhisperModel(
-            model_source or model_name,
-            device=backend,
-            compute_type=compute_type,
-            download_root=download_root,
-            local_files_only=local_files_only,
-        )
-        return cls(model, backend=backend, model_name=model_name)
+        requested_backend = backend.strip().lower() if backend else "auto"
+        backend_candidates = [requested_backend] if requested_backend != "auto" else ["cuda", "cpu"]
+
+        last_error: Exception | None = None
+        for selected_backend in backend_candidates:
+            try:
+                model = WhisperModel(
+                    model_source or model_name,
+                    device=selected_backend,
+                    compute_type=compute_type,
+                    download_root=download_root,
+                    local_files_only=local_files_only,
+                )
+                return cls(model, backend=selected_backend, model_name=model_name)
+            except Exception as exc:  # pragma: no cover - runtime dependent
+                last_error = exc
+                continue
+
+        raise TranscriberError(f"failed to initialize WhisperModel with backend candidates {backend_candidates}: {last_error}")
 
     def transcribe(self, recording: RecordingResult) -> TranscriptionResult:
         if recording.duration_ms < MIN_RECORDING_MS or not recording.samples:
@@ -86,7 +97,7 @@ def prepare_audio_input(samples: list[float]) -> Any:
 
 
 class StubTranscriber:
-    backend = BACKEND
+    backend = "scaffold"
     model_name = MODEL_NAME
 
     def transcribe(self, recording: RecordingResult) -> TranscriptionResult:
