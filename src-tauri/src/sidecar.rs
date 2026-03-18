@@ -143,10 +143,24 @@ fn build_sidecar_command(sidecar_root: &Path) -> Command {
         return command;
     }
 
-    let program = env::var("WHISPER_WINDOWS_PYTHON").unwrap_or_else(|_| "python".to_string());
+    let program = env::var("WHISPER_WINDOWS_PYTHON")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| workspace_venv_python(sidecar_root))
+        .unwrap_or_else(|| PathBuf::from("python"));
     let mut command = Command::new(program);
     command.arg("-m").arg("whisper_sidecar");
     command
+}
+
+fn workspace_venv_python(sidecar_root: &Path) -> Option<PathBuf> {
+    let candidates = [
+        sidecar_root.join(".venv").join("Scripts").join("python.exe"),
+        sidecar_root.join(".venv").join("bin").join("python"),
+    ];
+
+    candidates.into_iter().find(|candidate| candidate.exists())
 }
 
 fn spawn_stdout_thread(app: AppHandle, stdout: ChildStdout) {
