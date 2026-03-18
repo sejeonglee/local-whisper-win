@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "whisper-windows-sidecar"
+version = "0.1.0"
+description = "Development sidecar scaffold for WhisperWindows"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[project.scripts]
+whisper-sidecar = "whisper_sidecar.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/whisper_sidecar"]
