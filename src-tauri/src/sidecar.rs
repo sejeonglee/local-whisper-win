@@ -7,7 +7,7 @@ use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
-use crate::{clipboard, state};
+use crate::{clipboard, debug_log, state};
 
 #[derive(Default)]
 pub struct SidecarRuntime {
@@ -54,13 +54,17 @@ pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
     command
         .current_dir(&sidecar_root)
         .env("PYTHONPATH", merged_python_path)
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    debug_log::append(format!("spawning sidecar in {}", sidecar_root.display()));
 
     let mut child = command
         .spawn()
         .map_err(|err| format!("Failed to start sidecar: {err}"))?;
+    debug_log::append(format!("sidecar pid={}", child.id()));
     let stdin = child
         .stdin
         .take()
@@ -104,6 +108,7 @@ pub fn request_shutdown(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn send_command(app: &AppHandle, cmd: &str) -> Result<(), String> {
+    debug_log::append(format!("send_command {cmd}"));
     let payload = json!({
         "type": "command",
         "version": 1,
@@ -184,6 +189,7 @@ fn spawn_stderr_thread(stderr: ChildStderr) {
         let reader = BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
             if !line.trim().is_empty() {
+                debug_log::append(format!("sidecar stderr: {line}"));
                 eprintln!("[sidecar] {line}");
             }
         }
@@ -206,10 +212,14 @@ fn spawn_wait_thread(app: AppHandle, mut child: Child) {
 
         match status {
             Ok(status) if !status.success() && !shutdown_requested => {
+                debug_log::append(format!("sidecar exited with {status}"));
                 let _ = state::set_error(&app, format!("Sidecar exited with status {status}."));
             }
-            Ok(_) => {}
+            Ok(status) => {
+                debug_log::append(format!("sidecar exited cleanly with {status}"));
+            }
             Err(err) => {
+                debug_log::append(format!("sidecar wait failed: {err}"));
                 let _ = state::set_error(&app, format!("Failed waiting for sidecar exit: {err}"));
             }
         }
@@ -217,19 +227,24 @@ fn spawn_wait_thread(app: AppHandle, mut child: Child) {
 }
 
 fn handle_stdout_line(app: &AppHandle, line: &str) {
+    debug_log::append(format!("sidecar stdout: {line}"));
     match parse_event(line) {
         Ok(event) => {
             if event.event == "transcription" {
                 if let Some(text) = event.text.as_deref() {
+                    debug_log::append(format!("attempting paste of {} chars", text.chars().count()));
                     if let Err(err) = clipboard::paste_transcription(text) {
+                        debug_log::append(format!("paste failed: {err}"));
                         let _ = state::set_error(app, err);
                         return;
                     }
+                    debug_log::append("paste succeeded");
                 }
             }
             let _ = state::apply_sidecar_event(app, &event);
         }
         Err(err) => {
+            debug_log::append(format!("sidecar parse error: {err}"));
             let _ = state::set_error(app, format!("Invalid sidecar event: {err}"));
         }
     }

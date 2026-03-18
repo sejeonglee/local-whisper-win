@@ -72,19 +72,20 @@ class MainLoopTests(unittest.TestCase):
             return_value=BootstrapResult(cache_dir=Path("cache")),
         ) as bootstrap:
             with patch.object(sidecar_main, "create_runtime", return_value=(recorder, transcriber)):
-                with patch.object(
-                    sidecar_main,
-                    "iter_commands",
-                    return_value=iter(
-                        [
-                            CommandMessage(cmd="start_recording"),
-                            CommandMessage(cmd="stop_recording"),
-                            CommandMessage(cmd="shutdown"),
-                        ]
-                    ),
-                ):
-                    with patch.object(sidecar_main, "emit_event", side_effect=lambda event, **payload: events.append((event, payload))):
-                        exit_code = sidecar_main.main()
+                with patch.object(sidecar_main, "configure_stdio") as configure_stdio:
+                    with patch.object(
+                        sidecar_main,
+                        "iter_commands",
+                        return_value=iter(
+                            [
+                                CommandMessage(cmd="start_recording"),
+                                CommandMessage(cmd="stop_recording"),
+                                CommandMessage(cmd="shutdown"),
+                            ]
+                        ),
+                    ):
+                        with patch.object(sidecar_main, "emit_event", side_effect=lambda event, **payload: events.append((event, payload))):
+                            exit_code = sidecar_main.main()
 
         self.assertEqual(exit_code, 0)
         self.assertTrue(recorder.started is False)
@@ -92,6 +93,7 @@ class MainLoopTests(unittest.TestCase):
         self.assertEqual(events[1][0], "listening")
         self.assertEqual(events[2][0], "transcribing")
         self.assertEqual(events[3], ("transcription", {"text": "dictated text"}))
+        configure_stdio.assert_called_once()
         bootstrap.assert_called_once()
 
     def test_protocol_errors_emit_invalid_command_error(self) -> None:

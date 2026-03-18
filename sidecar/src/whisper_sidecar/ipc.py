@@ -17,6 +17,14 @@ class CommandMessage:
     cmd: str
 
 
+def configure_stdio() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="backslashreplace", newline="\n")
+
+
 def emit(payload: dict[str, object], stream: TextIO = sys.stdout) -> None:
     stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
     stream.flush()

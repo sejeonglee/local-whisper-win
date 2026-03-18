@@ -4,12 +4,13 @@ import sys
 from typing import Any
 
 from .bootstrap import BootstrapResult, ensure_model_ready
-from .ipc import ProtocolError, emit_error, emit_event, iter_commands
+from .ipc import ProtocolError, configure_stdio, emit_error, emit_event, iter_commands
 from .recorder import Recorder, StubRecorder
 from .transcriber import StubTranscriber, WhisperTranscriber
 
 
 def main() -> int:
+    configure_stdio()
     try:
         bootstrap_result = ensure_model_ready(emit_event)
         recorder, transcriber = create_runtime(bootstrap_result)

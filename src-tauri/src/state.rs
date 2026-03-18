@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{sidecar::SidecarEvent, tray};
+use crate::{debug_log, sidecar::SidecarEvent, tray};
 
 pub const APP_STATE_CHANGED: &str = "app-state-changed";
 pub const HOTKEY_LABEL: &str = "Ctrl+H";
@@ -97,6 +97,7 @@ pub fn set_transcribing_pending(app: &AppHandle) -> Result<(), String> {
 
 pub fn set_error(app: &AppHandle, message: impl Into<String>) -> Result<(), String> {
     let message = message.into();
+    debug_log::append(format!("set_error {message}"));
     update(app, move |state| {
         state.phase = AppPhase::Error;
         state.message = message.clone();
@@ -106,6 +107,7 @@ pub fn set_error(app: &AppHandle, message: impl Into<String>) -> Result<(), Stri
 }
 
 pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), String> {
+    debug_log::append(format!("apply_sidecar_event {}", event.event));
     update(app, |state| match event.event.as_str() {
         "starting" => {
             state.phase = AppPhase::Starting;

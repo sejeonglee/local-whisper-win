@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod clipboard;
+mod debug_log;
 mod sidecar;
 mod state;
 mod tray;
@@ -14,8 +15,11 @@ fn get_app_state(app: AppHandle) -> state::AppSnapshot {
 }
 
 fn handle_hotkey(app: &AppHandle) {
-    match state::snapshot(app).phase {
+    let phase = state::snapshot(app).phase;
+    debug_log::append(format!("hotkey pressed while phase={phase:?}"));
+    match phase {
         state::AppPhase::Ready => {
+            debug_log::append("hotkey -> start_recording");
             clipboard::capture_paste_target();
             let _ = state::set_listening_requested(app);
             if let Err(err) = sidecar::send_command(app, "start_recording") {
@@ -24,6 +28,7 @@ fn handle_hotkey(app: &AppHandle) {
             }
         }
         state::AppPhase::Listening => {
+            debug_log::append("hotkey -> stop_recording");
             let _ = state::set_transcribing_pending(app);
             if let Err(err) = sidecar::send_command(app, "stop_recording") {
                 let _ = state::set_error(app, err);
@@ -51,21 +56,27 @@ fn main() {
         .setup(|app| {
             let shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyH);
             let handle = app.handle().clone();
+            debug_log::append("startup begin");
 
             app.global_shortcut().register(shortcut)?;
+            debug_log::append("startup registered shortcut");
 
             if let Err(err) = state::broadcast(&handle) {
                 return Err(std::io::Error::other(err).into());
             }
+            debug_log::append("startup broadcasted initial state");
             if let Err(err) = tray::setup(&handle) {
                 return Err(std::io::Error::other(err).into());
             }
+            debug_log::append("startup tray ready");
             if let Err(err) = sidecar::spawn_sidecar(&handle) {
                 return Err(std::io::Error::other(err).into());
             }
+            debug_log::append("startup sidecar spawned");
             if let Err(err) = tray::show_overlay(&handle) {
                 return Err(std::io::Error::other(err).into());
             }
+            debug_log::append("startup overlay shown");
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -20,17 +20,21 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, IsWindow, IsWindowVisible, SetForegroundWindow,
 };
 
+use crate::debug_log;
+
 static PASTE_TARGET: OnceLock<Mutex<Option<isize>>> = OnceLock::new();
 
 pub fn capture_paste_target() {
     let target = unsafe { GetForegroundWindow() };
     if target.is_invalid() {
+        debug_log::append("capture_paste_target skipped: no foreground window");
         return;
     }
 
     if let Ok(mut guard) = paste_target().lock() {
         *guard = Some(target.0 as isize);
     }
+    debug_log::append(format!("captured paste target hwnd={:?}", target.0));
 }
 
 pub fn clear_paste_target() {
@@ -43,6 +47,11 @@ pub fn paste_transcription(text: &str) -> Result<(), String> {
     let _ole = OleGuard::acquire()?;
     let previous_clipboard = snapshot_clipboard()?;
     let target = load_paste_target();
+    debug_log::append(format!(
+        "paste_transcription start chars={} target={}",
+        text.chars().count(),
+        target.map(|hwnd| hwnd.0 as isize).unwrap_or_default()
+    ));
 
     set_text_clipboard(text)?;
 
@@ -129,6 +138,7 @@ fn restore_clipboard(previous: Option<&IDataObject>) -> Result<(), String> {
 
 fn set_text_clipboard(text: &str) -> Result<(), String> {
     let utf16 = encode_utf16_nul(text);
+    debug_log::append(format!("set_text_clipboard {} chars", text.chars().count()));
 
     unsafe {
         with_open_clipboard(|| {
@@ -162,11 +172,13 @@ fn set_text_clipboard(text: &str) -> Result<(), String> {
 
 fn restore_focus(target: Option<HWND>) -> Result<(), String> {
     let Some(target) = target else {
+        debug_log::append("restore_focus skipped: no target");
         return Ok(());
     };
 
     unsafe {
         if !IsWindow(Some(target)).as_bool() || !IsWindowVisible(target).as_bool() {
+            debug_log::append(format!("restore_focus skipped: target hwnd={} invalid", target.0 as isize));
             return Ok(());
         }
 
@@ -177,6 +189,7 @@ fn restore_focus(target: Option<HWND>) -> Result<(), String> {
                 .map_err(|err| format!("Failed to restore target window focus: {err}"))?;
             thread::sleep(Duration::from_millis(60));
         }
+        debug_log::append(format!("restore_focus complete target hwnd={}", target.0 as isize));
     }
 
     Ok(())
@@ -197,6 +210,7 @@ fn send_ctrl_v() -> Result<(), String> {
             inputs.len()
         ));
     }
+    debug_log::append("send_ctrl_v dispatched");
 
     Ok(())
 }
