@@ -9,6 +9,7 @@ from typing import Callable
 
 MODEL_NAME = "large-v3-turbo"
 MODEL_REPOSITORY = "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+DEFAULT_BACKEND = "auto"
 MODEL_ALLOW_PATTERNS = [
     "config.json",
     "preprocessor_config.json",
@@ -16,7 +17,6 @@ MODEL_ALLOW_PATTERNS = [
     "tokenizer.json",
     "vocabulary.*",
 ]
-BACKEND = "cuda"
 SCAFFOLD_TOTAL_BYTES = 64 * 1024 * 1024
 
 
@@ -28,7 +28,7 @@ class BootstrapError(RuntimeError):
 class BootstrapResult:
     cache_dir: Path
     model: str = MODEL_NAME
-    backend: str = BACKEND
+    backend: str = DEFAULT_BACKEND
     stub: bool = True
     model_path: Path | None = None
 
@@ -37,6 +37,11 @@ def default_cache_dir() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
         return Path(local_app_data) / "WhisperWindows" / "models"
+
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+    if xdg_cache_home:
+        return Path(xdg_cache_home) / "WhisperWindows" / "models"
+
     return Path.home() / ".cache" / "WhisperWindows" / "models"
 
 
@@ -45,7 +50,24 @@ def cache_marker_path(cache_dir: Path) -> Path:
 
 
 def runtime_mode() -> str:
-    return os.environ.get("WHISPER_WINDOWS_RUNTIME", "live").strip().lower()
+    return (
+        os.environ.get("WHISPER_RUNTIME")
+        or os.environ.get("WHISPER_WINDOWS_RUNTIME")
+        or "live"
+    ).strip().lower()
+
+
+def requested_backend() -> str:
+    return (
+        os.environ.get("WHISPER_BACKEND")
+        or os.environ.get("WHISPER_WINDOWS_BACKEND")
+        or DEFAULT_BACKEND
+    ).strip().lower()
+
+
+def runtime_cache_override() -> Path | None:
+    value = os.environ.get("WHISPER_MODEL_CACHE") or os.environ.get("WHISPER_WINDOWS_MODEL_CACHE")
+    return Path(value) if value else None
 
 
 def is_cached(cache_dir: Path) -> bool:
@@ -184,9 +206,10 @@ def ensure_live_model_ready(emit_event: Callable[..., None], cache_dir: Path) ->
 
 
 def ensure_model_ready(emit_event: Callable[..., None], cache_dir: Path | None = None) -> BootstrapResult:
-    resolved_cache_dir = cache_dir or Path(os.environ.get("WHISPER_WINDOWS_MODEL_CACHE", default_cache_dir()))
+    resolved_cache_dir = cache_dir or runtime_cache_override() or default_cache_dir()
     marker = cache_marker_path(resolved_cache_dir)
     selected_runtime = runtime_mode()
+    selected_backend = requested_backend()
     model_path: Path | None = None
 
     emit_event("starting")
@@ -219,12 +242,13 @@ def ensure_model_ready(emit_event: Callable[..., None], cache_dir: Path | None =
     else:
         model_path = ensure_live_model_ready(emit_event, resolved_cache_dir)
 
-    emit_event("loading_model", backend=BACKEND)
+    emit_event("loading_model", backend=selected_backend)
     if selected_runtime == "scaffold":
         time.sleep(0.1)
 
     return BootstrapResult(
         cache_dir=resolved_cache_dir,
+        backend=selected_backend,
         stub=selected_runtime == "scaffold",
         model_path=model_path,
     )

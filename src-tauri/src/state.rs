@@ -185,10 +185,14 @@ pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), 
         "transcription" => {
             state.phase = AppPhase::Ready;
             state.message = if let Some(text) = event.text.as_deref() {
-                format!(
-                    "Pasted {} characters and restored the clipboard.",
-                    text.chars().count()
-                )
+                let chars = text.chars().count();
+                if cfg!(target_os = "windows") {
+                    format!("Pasted {chars} characters and restored the clipboard.")
+                } else {
+                    format!(
+                        "Copied {chars} characters to the clipboard. Press Ctrl+V in the target app."
+                    )
+                }
             } else {
                 ready_message(&state.hotkey)
             };

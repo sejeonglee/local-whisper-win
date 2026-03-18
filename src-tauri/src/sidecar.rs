@@ -150,7 +150,7 @@ fn sidecar_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn build_sidecar_command(sidecar_root: &Path) -> Command {
-    if let Ok(uv_path) = env::var("WHISPER_WINDOWS_UV") {
+    if let Ok(uv_path) = env::var("WHISPER_UV").or_else(|_| env::var("WHISPER_WINDOWS_UV")) {
         let mut command = Command::new(uv_path);
         command
             .arg("run")
@@ -160,7 +160,9 @@ fn build_sidecar_command(sidecar_root: &Path) -> Command {
         return command;
     }
 
-    let program = env::var("WHISPER_WINDOWS_PYTHON")
+    let program = env::var("WHISPER_PYTHON")
+        .ok()
+        .or_else(|| env::var("WHISPER_WINDOWS_PYTHON").ok())
         .ok()
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
@@ -174,6 +176,9 @@ fn build_sidecar_command(sidecar_root: &Path) -> Command {
 
 fn bundled_python(sidecar_root: &Path) -> Option<PathBuf> {
     let candidates = [
+        sidecar_root.join("python-runtime").join("bin").join("python"),
+        sidecar_root.join("python-runtime").join("Scripts").join("python.exe"),
+        sidecar_root.join("python-runtime").join("python.exe"),
         sidecar_root.join("python").join("python.exe"),
         sidecar_root.join("python").join("bin").join("python"),
     ];
@@ -196,12 +201,25 @@ fn workspace_venv_python(sidecar_root: &Path) -> Option<PathBuf> {
 fn bundled_site_packages(sidecar_root: &Path) -> Option<PathBuf> {
     let candidates = [
         sidecar_root.join("site-packages"),
+        sidecar_root.join("python").join("site-packages"),
+        sidecar_root.join("python").join("Lib").join("site-packages"),
+        sidecar_root.join("python").join("lib").join("site-packages"),
         sidecar_root
             .join("python")
+            .join("lib")
+            .join("python3.12")
+            .join("site-packages"),
+        sidecar_root.join("python-runtime").join("site-packages"),
+        sidecar_root
+            .join("python-runtime")
             .join("Lib")
             .join("site-packages"),
         sidecar_root
-            .join("python")
+            .join("python-runtime")
+            .join("lib")
+            .join("site-packages"),
+        sidecar_root
+            .join("python-runtime")
             .join("lib")
             .join("python3.12")
             .join("site-packages"),
@@ -226,16 +244,20 @@ fn merged_python_path(sidecar_root: &Path) -> Result<std::ffi::OsString, String>
 
 fn apply_bundled_python_env(command: &mut Command, sidecar_root: &Path) -> Result<(), String> {
     let Some(python_root) =
-        bundled_python(sidecar_root).and_then(|python| python.parent().map(PathBuf::from))
+        bundled_python(sidecar_root).and_then(|python| bundled_python_root(&python))
     else {
         return Ok(());
     };
 
-    let mut path_entries = vec![python_root.clone()];
-    let scripts_dir = python_root.join("Scripts");
-    if scripts_dir.exists() {
-        path_entries.push(scripts_dir);
-    }
+    let mut path_entries: Vec<PathBuf> = vec![
+        python_root.join("bin"),
+        python_root.join("Scripts"),
+        python_root.clone(),
+    ]
+    .into_iter()
+    .filter(|path| path.exists())
+    .collect();
+
     if let Some(existing) = env::var_os("PATH") {
         path_entries.extend(env::split_paths(&existing));
     }
@@ -250,6 +272,16 @@ fn apply_bundled_python_env(command: &mut Command, sidecar_root: &Path) -> Resul
     ));
 
     Ok(())
+}
+
+fn bundled_python_root(python_path: &Path) -> Option<PathBuf> {
+    let directory = python_path.parent()?;
+    let file_name = directory.file_name()?.to_string_lossy();
+    if file_name == "bin" || file_name == "Scripts" {
+        directory.parent().map(PathBuf::from)
+    } else {
+        Some(directory.to_path_buf())
+    }
 }
 
 fn spawn_stdout_thread(app: AppHandle, stdout: ChildStdout) {
