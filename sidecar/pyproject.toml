@@ -5,10 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "whisper-windows-sidecar"
 version = "0.1.0"
-description = "Development sidecar scaffold for WhisperWindows"
+description = "Python sidecar for local WhisperWindows dictation"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "faster-whisper==1.2.1",
+    "numpy==2.4.3",
+    "sounddevice==0.5.5",
+]
 
 [project.scripts]
 whisper-sidecar = "whisper_sidecar.__main__:main"

@@ -1,5 +1,9 @@
 # Whisper Windows Sidecar
 
-This folder contains the Python sidecar scaffold for WhisperWindows.
+This folder contains the Python sidecar that handles local model bootstrap, audio
+capture, and transcription for WhisperWindows.
 
-The current implementation intentionally simulates the first-run model bootstrap so the Tauri shell and overlay can exercise startup states before the real faster-whisper and packaging work lands.
+The default runtime is `live`, which uses `faster-whisper`, `numpy`, and
+`sounddevice` from the project virtualenv. Set `WHISPER_WINDOWS_RUNTIME=scaffold`
+only when you want to exercise the UI flow without downloading or loading a real
+model.

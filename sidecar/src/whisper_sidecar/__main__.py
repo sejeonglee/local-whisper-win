@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 from typing import Any
 
@@ -53,13 +52,14 @@ def main() -> int:
 
 
 def create_runtime(bootstrap_result: BootstrapResult) -> tuple[Any, Any]:
-    runtime_mode = os.environ.get("WHISPER_WINDOWS_RUNTIME", "scaffold").strip().lower()
-    if runtime_mode == "live":
+    if not bootstrap_result.stub:
         return (
             Recorder(),
             WhisperTranscriber.load(
                 model_name=bootstrap_result.model,
                 backend=bootstrap_result.backend,
+                download_root=str(bootstrap_result.cache_dir),
+                local_files_only=True,
             ),
         )
 

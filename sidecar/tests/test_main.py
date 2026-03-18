@@ -31,6 +31,33 @@ class FakeTranscriber:
 
 
 class MainLoopTests(unittest.TestCase):
+    def test_create_runtime_uses_bootstrap_cache_for_live_mode(self) -> None:
+        bootstrap_result = BootstrapResult(cache_dir=Path("cache"), stub=False)
+
+        with patch.object(sidecar_main, "Recorder", return_value="recorder") as recorder_cls:
+            with patch.object(sidecar_main.WhisperTranscriber, "load", return_value="transcriber") as load:
+                recorder, transcriber = sidecar_main.create_runtime(bootstrap_result)
+
+        self.assertEqual((recorder, transcriber), ("recorder", "transcriber"))
+        recorder_cls.assert_called_once_with()
+        load.assert_called_once_with(
+            model_name=bootstrap_result.model,
+            backend=bootstrap_result.backend,
+            download_root=str(bootstrap_result.cache_dir),
+            local_files_only=True,
+        )
+
+    def test_create_runtime_uses_stub_runtime_when_bootstrap_result_is_stub(self) -> None:
+        bootstrap_result = BootstrapResult(cache_dir=Path("cache"), stub=True)
+
+        with patch.object(sidecar_main, "StubRecorder", return_value="stub-recorder") as recorder_cls:
+            with patch.object(sidecar_main, "StubTranscriber", return_value="stub-transcriber") as transcriber_cls:
+                recorder, transcriber = sidecar_main.create_runtime(bootstrap_result)
+
+        self.assertEqual((recorder, transcriber), ("stub-recorder", "stub-transcriber"))
+        recorder_cls.assert_called_once_with()
+        transcriber_cls.assert_called_once_with()
+
     def test_main_emits_ready_and_transcription_flow(self) -> None:
         events = []
         recorder = FakeRecorder()

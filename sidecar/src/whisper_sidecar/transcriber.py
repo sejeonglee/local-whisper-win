@@ -43,6 +43,8 @@ class WhisperTranscriber:
         model_name: str = MODEL_NAME,
         backend: str = BACKEND,
         compute_type: str = COMPUTE_TYPE,
+        download_root: str | None = None,
+        local_files_only: bool = False,
     ) -> "WhisperTranscriber":
         try:
             from faster_whisper import WhisperModel
@@ -51,7 +53,13 @@ class WhisperTranscriber:
                 "faster-whisper is required for live transcription. Install sidecar dependencies first."
             ) from exc
 
-        model = WhisperModel(model_name, device=backend, compute_type=compute_type)
+        model = WhisperModel(
+            model_name,
+            device=backend,
+            compute_type=compute_type,
+            download_root=download_root,
+            local_files_only=local_files_only,
+        )
         return cls(model, backend=backend, model_name=model_name)
 
     def transcribe(self, recording: RecordingResult) -> TranscriptionResult:
