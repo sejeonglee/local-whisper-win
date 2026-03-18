@@ -1,0 +1,47 @@
+# Local tool state
+.claude/
+.idea/
+.vscode/
+.vs/
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+coverage/
+dist-ssr/
+*.tsbuildinfo
+
+# Rust / Tauri
+target/
+src-tauri/target/
+src-tauri/gen/
+
+# Bundled binaries and package outputs
+*.msi
+*.exe
+*.pdb
+*.zip
+*.7z
