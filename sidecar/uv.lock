@@ -303,6 +303,21 @@ wheels = [
 ]
 
 [[package]]
+name = "onnxruntime-qnn"
+version = "1.24.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flatbuffers" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "protobuf" },
+    { name = "sympy" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b7/06/6cccfb87d83f892c1a94d5055ff863ff87d08ae0638bd536408dc85f5177/onnxruntime_qnn-1.24.4-cp312-cp312-win_arm64.whl", hash = "sha256:3b6031669b86d9af1e432d15c2c587dcaa7e147fe0e923b382a05b50a7246542", size = 64637930, upload-time = "2026-03-17T22:04:13.636Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.0"
 source = { registry = "https://pypi.org/simple" }
@@ -490,6 +505,7 @@ source = { editable = "." }
 dependencies = [
     { name = "faster-whisper" },
     { name = "numpy" },
+    { name = "onnxruntime-qnn", marker = "(platform_machine == 'ARM64' and sys_platform == 'win32') or (platform_machine == 'aarch64' and sys_platform == 'win32') or (platform_machine == 'arm64' and sys_platform == 'win32')" },
     { name = "sounddevice" },
 ]
 
@@ -497,5 +513,6 @@ dependencies = [
 requires-dist = [
     { name = "faster-whisper", specifier = "==1.2.1" },
     { name = "numpy", specifier = "==2.4.3" },
+    { name = "onnxruntime-qnn", marker = "(platform_machine == 'ARM64' and sys_platform == 'win32') or (platform_machine == 'aarch64' and sys_platform == 'win32') or (platform_machine == 'arm64' and sys_platform == 'win32')", specifier = ">=1.18.0" },
     { name = "sounddevice", specifier = "==0.5.5" },
 ]
