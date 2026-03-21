@@ -3,7 +3,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use windows::Win32::Foundation::{HANDLE, HWND};
+use windows::Win32::Foundation::{HANDLE, HGLOBAL, HWND};
 use windows::Win32::System::Com::IDataObject;
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
@@ -142,7 +142,7 @@ fn restore_clipboard(previous: ClipboardSnapshot) -> Result<(), String> {
 
     if previous.is_empty {
         with_open_clipboard(|| {
-            EmptyClipboard().map_err(|err| format!("Failed to clear clipboard: {err}"))?;
+            unsafe { EmptyClipboard() }.map_err(|err| format!("Failed to clear clipboard: {err}"))?;
             Ok(())
         })?;
         return Ok(());
@@ -156,8 +156,8 @@ fn restore_clipboard_from_data_object(data: &IDataObject) -> Result<(), String> 
     let mut last_error = None;
 
     for _ in 0..10 {
-        match OleSetClipboard(data.clone()) {
-            Ok(()) => match OleFlushClipboard() {
+        match unsafe { OleSetClipboard(data) } {
+            Ok(()) => match unsafe { OleFlushClipboard() } {
                 Ok(()) => return Ok(()),
                 Err(err) => {
                     last_error = Some(format!("Failed to flush restored clipboard: {err}"));
@@ -303,13 +303,13 @@ fn with_open_clipboard<T>(operation: impl FnOnce() -> Result<T, String>) -> Resu
 
 fn snapshot_plain_text_clipboard() -> Result<Option<String>, String> {
     with_open_clipboard(|| {
-        if !unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32) }.as_bool() {
+        if unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32) }.is_err() {
             return Ok(None);
         }
 
         let handle = unsafe { GetClipboardData(CF_UNICODETEXT.0 as u32) }
             .map_err(|err| format!("Failed to read unicode clipboard data: {err}"))?;
-        let handle = HANDLE(handle.0);
+        let handle = HGLOBAL(handle.0);
         let byte_len = unsafe { GlobalSize(handle) } as usize;
         if byte_len == 0 {
             return Ok(None);
