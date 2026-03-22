@@ -13,11 +13,15 @@ dependencies = [
     "numpy==2.4.3",
     "qwen-asr==0.0.6",
     "sounddevice==0.5.5",
-    "torch>=2.7,<2.9",
+    # CUDA 12.8 wheel from PyTorch official index (Windows x64, CPython 3.12).
+    "torch @ https://download.pytorch.org/whl/cu128/torch-2.8.0%2Bcu128-cp312-cp312-win_amd64.whl",
 ]
 
 [project.scripts]
 whisper-sidecar = "whisper_sidecar.__main__:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/whisper_sidecar"]
