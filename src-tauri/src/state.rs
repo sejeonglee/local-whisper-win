@@ -247,6 +247,19 @@ pub fn apply_sidecar_event(app: &AppHandle, event: &SidecarEvent) -> Result<(), 
                 .clone()
                 .unwrap_or_else(|| "Unknown sidecar error".to_string());
         }
+        "startup_timeout" => {
+            state.phase = AppPhase::Error;
+            state.last_error = Some(
+                event
+                    .message
+                    .clone()
+                    .unwrap_or_else(|| "Sidecar startup timed out without ready event.".to_string()),
+            );
+            state.message = state
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "Sidecar startup timed out without ready event.".to_string());
+        }
         _ => {}
     })
 }
@@ -331,7 +344,10 @@ fn update(app: &AppHandle, mutate: impl FnOnce(&mut AppSnapshot)) -> Result<(), 
         guard.clone()
     };
 
-    tray::sync(app, &next_snapshot)?;
+    if let Err(err) = tray::sync(app, &next_snapshot) {
+        debug_log::append(format!("tray sync failed: {err}"));
+    }
+
     app.emit(APP_STATE_CHANGED, next_snapshot)
         .map_err(|err| err.to_string())
 }

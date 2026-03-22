@@ -154,14 +154,16 @@ fn main() {
                 return Err(std::io::Error::other(err).into());
             }
             debug_log::append("startup tray ready");
-            if let Err(err) = sidecar::spawn_sidecar(&handle) {
-                return Err(std::io::Error::other(err).into());
-            }
-            debug_log::append("startup sidecar spawned");
             if let Err(err) = tray::show_overlay(&handle) {
                 return Err(std::io::Error::other(err).into());
             }
             debug_log::append("startup overlay shown");
+
+            if let Err(err) = sidecar::spawn_sidecar(&handle) {
+                debug_log::append(format!("startup sidecar spawn failed: {err}"));
+                let _ = state::set_error(&handle, format!("Sidecar failed to start: {err}"));
+            }
+            debug_log::append("startup sidecar spawn attempted");
             Ok(())
         })
         .run(tauri::generate_context!())
