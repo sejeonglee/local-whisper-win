@@ -133,7 +133,15 @@ def huggingface_snapshot_download(**kwargs: object) -> object:
             "huggingface_hub is required for live model bootstrap. Install sidecar dependencies first."
         ) from exc
 
-    return snapshot_download(**kwargs)
+    try:
+        return snapshot_download(**kwargs)
+    except TypeError as exc:
+        unsupported = "unexpected keyword argument" in str(exc)
+        if not unsupported or "dry_run" not in str(kwargs):
+            raise
+        kwargs = dict(kwargs)
+        kwargs.pop("dry_run")
+        return snapshot_download(**kwargs)
 
 
 def live_model_dir(
@@ -201,13 +209,21 @@ def model_download_kwargs(cache_dir: Path, selection: ResolvedSelection) -> dict
 
 
 def live_download_plan(cache_dir: Path, selection: ResolvedSelection) -> tuple[int, bool]:
+    if is_live_model_cached(cache_dir=cache_dir, engine=selection.engine, model_name=selection.model):
+        return 0, False
+
     plan = huggingface_snapshot_download(
         **model_download_kwargs(cache_dir, selection),
         dry_run=True,
     )
-    pending = [item for item in plan if getattr(item, "will_download", False)]
-    total_bytes = sum(int(getattr(item, "file_size", 0)) for item in pending)
-    return total_bytes, bool(pending)
+    if hasattr(plan, "__iter__"):
+        pending = [item for item in plan if getattr(item, "will_download", False)]
+        total_bytes = sum(int(getattr(item, "file_size", 0)) for item in pending)
+        has_pending_files = bool(pending)
+    else:
+        total_bytes = 0
+        has_pending_files = True
+    return total_bytes, has_pending_files
 
 
 def download_live_model(

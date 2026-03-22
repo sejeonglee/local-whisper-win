@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -133,14 +134,42 @@ class QwenTranscriber:
                 "qwen-asr and torch are required for Qwen3-ASR transcription. Install sidecar dependencies first."
             ) from exc
 
-        model = Qwen3ASRModel.from_pretrained(
-            model_source or model_name,
-            dtype=resolve_torch_dtype(dtype, torch),
-            device_map=resolve_device_map(backend),
-            max_inference_batch_size=max_inference_batch_size,
-            max_new_tokens=max_new_tokens,
-        )
-        return cls(model, backend=backend, model_name=model_name)
+        dtype_value = resolve_torch_dtype(dtype, torch)
+        device_map = resolve_device_map(backend)
+        load_candidates: list[str] = [model_source or model_name]
+        if model_source and model_name not in load_candidates:
+            load_candidates.append(model_name)
+
+        last_error: Exception | None = None
+        for candidate in load_candidates:
+            if candidate is None:
+                continue
+            try:
+                print(f"[qwen] loading model from '{candidate}'", file=sys.stderr, flush=True)
+                model = Qwen3ASRModel.from_pretrained(
+                    candidate,
+                    dtype=dtype_value,
+                    device_map=device_map,
+                    max_inference_batch_size=max_inference_batch_size,
+                    max_new_tokens=max_new_tokens,
+                )
+                return cls(model, backend=backend, model_name=model_name)
+            except Exception as exc:  # pragma: no cover - environment dependent
+                print(
+                    f"[qwen] failed load candidate '{candidate}': {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                last_error = exc
+
+        if last_error is None:
+            raise TranscriberError(
+                "Unable to resolve a candidate checkpoint path for Qwen3-ASR model loading."
+            )
+
+        raise TranscriberError(
+            f"Failed to load Qwen3-ASR from candidates {load_candidates}: {last_error}"
+        ) from last_error
 
     def transcribe(self, recording: RecordingResult) -> TranscriptionResult:
         if recording.duration_ms < MIN_RECORDING_MS or not recording.samples:
