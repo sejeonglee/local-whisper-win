@@ -10,6 +10,8 @@ use tauri::{AppHandle, Manager};
 
 use crate::{clipboard, debug_log, settings, state};
 
+const SIDE_CAR_STARTUP_WATCHDOG_SECS: u64 = 300;
+
 #[derive(Default)]
 pub struct SidecarRuntime {
     stdin: Mutex<Option<ChildStdin>>,
@@ -44,7 +46,7 @@ pub struct SidecarEvent {
 }
 
 pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
-    let sidecar_root = sidecar_root(app)?;
+    let sidecar_root = normalize_for_windows(sidecar_root(app)?);
     let asr_engine = settings::load_asr_engine(app);
     let generation = next_generation(app);
     let mut command = build_sidecar_command(&sidecar_root);
@@ -96,6 +98,7 @@ pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
     spawn_stdout_thread(app.clone(), stdout, generation);
     spawn_stderr_thread(stderr);
     spawn_wait_thread(app.clone(), child, generation);
+    spawn_startup_watchdog(app.clone(), generation);
 
     Ok(())
 }
@@ -179,9 +182,20 @@ fn sidecar_root(app: &AppHandle) -> Result<PathBuf, String> {
     ))
 }
 
+fn normalize_for_windows(path: PathBuf) -> PathBuf {
+    if cfg!(windows) {
+        let value = path.to_string_lossy();
+        if value.starts_with(r"\\?\") {
+            return PathBuf::from(value.trim_start_matches(r"\\?\"));
+        }
+    }
+
+    path
+}
+
 fn build_sidecar_command(sidecar_root: &Path) -> Command {
     if let Ok(uv_path) = env::var("WHISPER_WINDOWS_UV") {
-        let mut command = Command::new(uv_path);
+        let mut command = Command::new(normalize_for_windows(PathBuf::from(uv_path)));
         command
             .arg("run")
             .arg("--project")
@@ -196,6 +210,7 @@ fn build_sidecar_command(sidecar_root: &Path) -> Command {
         .map(PathBuf::from)
         .or_else(|| bundled_python(sidecar_root))
         .or_else(|| workspace_venv_python(sidecar_root))
+        .map(normalize_for_windows)
         .unwrap_or_else(|| PathBuf::from("python"));
     let mut command = Command::new(program);
     command.arg("-m").arg("whisper_sidecar");
@@ -225,30 +240,36 @@ fn workspace_venv_python(sidecar_root: &Path) -> Option<PathBuf> {
 
 fn bundled_site_packages(sidecar_root: &Path) -> Option<PathBuf> {
     let candidates = [
-        sidecar_root.join("site-packages"),
-        sidecar_root
-            .join("python")
-            .join("Lib")
-            .join("site-packages"),
-        sidecar_root
-            .join("python")
-            .join("lib")
-            .join("python3.12")
-            .join("site-packages"),
+        normalize_for_windows(sidecar_root.join("site-packages")),
+        normalize_for_windows(
+            sidecar_root
+                .join("python")
+                .join("Lib")
+                .join("site-packages"),
+        ),
+        normalize_for_windows(
+            sidecar_root
+                .join("python")
+                .join("lib")
+                .join("python3.12")
+                .join("site-packages"),
+        ),
     ];
 
     candidates.into_iter().find(|candidate| candidate.exists())
 }
 
 fn merged_python_path(sidecar_root: &Path) -> Result<std::ffi::OsString, String> {
-    let mut entries = vec![sidecar_root.join("src")];
+    let mut entries = vec![normalize_for_windows(sidecar_root.join("src"))];
 
     if let Some(site_packages) = bundled_site_packages(sidecar_root) {
-        entries.push(site_packages);
+        entries.push(normalize_for_windows(site_packages));
     }
 
     if let Some(existing) = env::var_os("PYTHONPATH") {
-        entries.extend(env::split_paths(&existing));
+        for path in env::split_paths(&existing) {
+            entries.push(normalize_for_windows(path));
+        }
     }
 
     env::join_paths(entries).map_err(|err| format!("Failed to construct PYTHONPATH: {err}"))
@@ -260,6 +281,7 @@ fn apply_bundled_python_env(command: &mut Command, sidecar_root: &Path) -> Resul
     else {
         return Ok(());
     };
+    let python_root = normalize_for_windows(python_root);
 
     let mut path_entries = vec![python_root.clone()];
     let scripts_dir = python_root.join("Scripts");
@@ -320,6 +342,7 @@ fn spawn_wait_thread(app: AppHandle, mut child: Child, generation: u64) {
     std::thread::spawn(move || {
         let status = child.wait();
         let is_current = is_current_generation(&app, generation);
+        let phase = state::snapshot(&app).phase;
         let shutdown_requested = app
             .state::<SidecarRuntime>()
             .shutdown_requested
@@ -335,8 +358,18 @@ fn spawn_wait_thread(app: AppHandle, mut child: Child, generation: u64) {
 
         match status {
             Ok(status) if !status.success() && !shutdown_requested && is_current => {
+                let mut message = format!("Sidecar exited with status {status}.");
+                if matches!(
+                    phase,
+                    state::AppPhase::Starting | state::AppPhase::DownloadingModel | state::AppPhase::LoadingModel
+                ) {
+                    message = format!(
+                        "Sidecar exited while starting the runtime ({:?}) before reporting ready. Check sidecar logs for Qwen model load details.",
+                        phase
+                    );
+                }
                 debug_log::append(format!("sidecar exited with {status}"));
-                let _ = state::set_error(&app, format!("Sidecar exited with status {status}."));
+                let _ = state::set_error(&app, message);
             }
             Ok(status) => {
                 debug_log::append(format!("sidecar exited cleanly with {status}"));
@@ -348,6 +381,29 @@ fn spawn_wait_thread(app: AppHandle, mut child: Child, generation: u64) {
             Err(err) => {
                 debug_log::append(format!("stale sidecar wait failed: {err}"));
             }
+        }
+    });
+}
+
+fn spawn_startup_watchdog(app: AppHandle, generation: u64) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(SIDE_CAR_STARTUP_WATCHDOG_SECS));
+
+        if !is_current_generation(&app, generation) {
+            return;
+        }
+
+        let snapshot = state::snapshot(&app);
+        if matches!(
+            snapshot.phase,
+            state::AppPhase::Starting | state::AppPhase::DownloadingModel | state::AppPhase::LoadingModel
+        ) {
+            let _ = state::set_error(
+                &app,
+                format!(
+                    "Sidecar startup timeout ({SIDE_CAR_STARTUP_WATCHDOG_SECS}s) while loading runtime. Check logs and try restarting."
+                ),
+            );
         }
     });
 }
