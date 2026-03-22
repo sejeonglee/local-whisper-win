@@ -6,7 +6,12 @@ from typing import Any
 from .bootstrap import BootstrapResult, ensure_model_ready
 from .ipc import ProtocolError, configure_stdio, emit_error, emit_event, iter_commands
 from .recorder import Recorder, StubRecorder
-from .transcriber import StubTranscriber, WhisperTranscriber
+from .transcriber import (
+    QualcommQnnTranscriber,
+    StubTranscriber,
+    WhisperTranscriber,
+    QNN_BACKEND,
+)
 
 
 def main() -> int:
@@ -54,6 +59,18 @@ def main() -> int:
 
 def create_runtime(bootstrap_result: BootstrapResult) -> tuple[Any, Any]:
     if not bootstrap_result.stub:
+        if bootstrap_result.backend == QNN_BACKEND:
+            if bootstrap_result.model_path is None:
+                raise RuntimeError("QNN backend selected but no model path was resolved.")
+            return (
+                Recorder(),
+                QualcommQnnTranscriber.load(
+                    model_name=bootstrap_result.model,
+                    model_source=str(bootstrap_result.model_path),
+                    backend=bootstrap_result.backend,
+                ),
+            )
+
         return (
             Recorder(),
             WhisperTranscriber.load(

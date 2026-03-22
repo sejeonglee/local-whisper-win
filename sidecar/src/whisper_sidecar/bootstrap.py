@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +18,33 @@ MODEL_ALLOW_PATTERNS = [
     "vocabulary.*",
 ]
 BACKEND = "cuda"
+BACKEND_AUTO = "auto"
+BACKEND_CUDA = "cuda"
+BACKEND_QNN = "qnn"
 SCAFFOLD_TOTAL_BYTES = 64 * 1024 * 1024
+QUALCOMM_MODEL_FILE_NAME = (
+    "whisper_large_v3_turbo-hfwhisperdecoder-qualcomm_snapdragon_x_elite.bin"
+)
+BACKEND_ENV_VAR = "WHISPER_WINDOWS_BACKEND"
+QUALCOMM_MODEL_PATH_ENV_VAR = "WHISPER_WINDOWS_QUALCOMM_MODEL_PATH"
+
+
+def _normalize_backend(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in ("", BACKEND_AUTO):
+        return resolve_default_backend()
+    if normalized in (BACKEND_CUDA, "cpu"):
+        return BACKEND_CUDA
+    if normalized in (BACKEND_QNN, "qualcomm", "qnn-sdk"):
+        return BACKEND_QNN
+    raise BootstrapError(f"Unsupported backend '{value}'. Use one of: auto, cuda, qnn.")
+
+
+def resolve_default_backend() -> str:
+    machine = platform.machine().lower()
+    if machine in {"arm64", "aarch64"}:
+        return BACKEND_QNN
+    return BACKEND_CUDA
 
 
 class BootstrapError(RuntimeError):
@@ -31,6 +58,10 @@ class BootstrapResult:
     backend: str = BACKEND
     stub: bool = True
     model_path: Path | None = None
+
+
+def resolve_backend() -> str:
+    return _normalize_backend(os.environ.get(BACKEND_ENV_VAR, BACKEND_AUTO))
 
 
 def default_cache_dir() -> Path:
@@ -183,11 +214,52 @@ def ensure_live_model_ready(emit_event: Callable[..., None], cache_dir: Path) ->
     return model_dir
 
 
+def find_qualcomm_model(cache_dir: Path) -> Path | None:
+    explicit_path = os.environ.get(QUALCOMM_MODEL_PATH_ENV_VAR)
+    if explicit_path is not None:
+        explicit_model = Path(explicit_path).expanduser()
+        if explicit_model.exists():
+            return explicit_model
+        return None
+
+    search_roots = [
+        cache_dir / MODEL_NAME / "qualcomm" / QUALCOMM_MODEL_FILE_NAME,
+        cache_dir / "qualcomm" / QUALCOMM_MODEL_FILE_NAME,
+        cache_dir / QUALCOMM_MODEL_FILE_NAME,
+    ]
+
+    for candidate in search_roots:
+        if not candidate:
+            continue
+        if candidate.exists():
+            return candidate
+
+    for match in cache_dir.rglob(QUALCOMM_MODEL_FILE_NAME):
+        return match
+
+    return None
+
+
+def ensure_qualcomm_model_ready(emit_event: Callable[..., None], cache_dir: Path) -> Path:
+    model_path = find_qualcomm_model(cache_dir)
+    if model_path is None:
+        raise BootstrapError(
+            "Qualcomm Snapdragon backend requested but no compiled model was found. "
+            "Set WHISPER_WINDOWS_QUALCOMM_MODEL_PATH to a downloaded "
+            f"'{QUALCOMM_MODEL_FILE_NAME}' binary or place it under "
+            "`qualcomm` subfolder in the model cache. "
+            "Learn about supported models at https://aihub.qualcomm.com/models/whisper_large_v3_turbo."
+        )
+    emit_event("qualcomm_model_found", model=QUALCOMM_MODEL_FILE_NAME, path=str(model_path))
+    return model_path
+
+
 def ensure_model_ready(emit_event: Callable[..., None], cache_dir: Path | None = None) -> BootstrapResult:
     resolved_cache_dir = cache_dir or Path(os.environ.get("WHISPER_WINDOWS_MODEL_CACHE", default_cache_dir()))
     marker = cache_marker_path(resolved_cache_dir)
     selected_runtime = runtime_mode()
     model_path: Path | None = None
+    selected_backend = resolve_backend()
 
     emit_event("starting")
 
@@ -217,14 +289,18 @@ def ensure_model_ready(emit_event: Callable[..., None], cache_dir: Path | None =
                 encoding="utf-8",
             )
     else:
-        model_path = ensure_live_model_ready(emit_event, resolved_cache_dir)
+        if selected_backend == BACKEND_QNN:
+            model_path = ensure_qualcomm_model_ready(emit_event, resolved_cache_dir)
+        else:
+            model_path = ensure_live_model_ready(emit_event, resolved_cache_dir)
 
-    emit_event("loading_model", backend=BACKEND)
+    emit_event("loading_model", model=MODEL_NAME, backend=selected_backend)
     if selected_runtime == "scaffold":
         time.sleep(0.1)
 
     return BootstrapResult(
         cache_dir=resolved_cache_dir,
         stub=selected_runtime == "scaffold",
+        backend=selected_backend,
         model_path=model_path,
     )

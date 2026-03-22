@@ -5,7 +5,16 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import whisper_sidecar.bootstrap as bootstrap
-from whisper_sidecar.bootstrap import MODEL_NAME, cache_marker_path, ensure_model_ready
+from whisper_sidecar.bootstrap import (
+    BACKEND_CUDA,
+    BACKEND_QNN,
+    MODEL_NAME,
+    QUALCOMM_MODEL_FILE_NAME,
+    cache_marker_path,
+    ensure_model_ready,
+    resolve_backend,
+    resolve_default_backend,
+)
 
 
 class BootstrapTests(unittest.TestCase):
@@ -64,6 +73,40 @@ class BootstrapTests(unittest.TestCase):
         self.assertFalse(result.stub)
         self.assertEqual(result.model_path, cache_root / MODEL_NAME)
         download.assert_called_once()
+
+    def test_live_runtime_resolves_qnn_model_from_env_path(self) -> None:
+        events: list[tuple[str, dict]] = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_root = Path(temp_dir)
+            qnn_model = cache_root / QUALCOMM_MODEL_FILE_NAME
+            qnn_model.write_bytes(b"")
+            with patch.dict(
+                "os.environ",
+                {
+                    "WHISPER_WINDOWS_RUNTIME": "live",
+                    "WHISPER_WINDOWS_BACKEND": BACKEND_QNN,
+                    "WHISPER_WINDOWS_QUALCOMM_MODEL_PATH": str(qnn_model),
+                },
+            ):
+                result = ensure_model_ready(
+                    lambda event, **payload: events.append((event, payload)),
+                    cache_dir=cache_root,
+                )
+
+        self.assertEqual(result.backend, BACKEND_QNN)
+        self.assertEqual(result.model_path, qnn_model)
+        self.assertEqual(events[0][0], "starting")
+        self.assertEqual(events[1][0], "qualcomm_model_found")
+        self.assertEqual(events[2][0], "loading_model")
+        self.assertEqual(events[2][1]["backend"], BACKEND_QNN)
+
+    def test_default_backend_auto_maps_to_cuda_on_amd64_host(self) -> None:
+        with patch.object(bootstrap.platform, "machine", return_value="AMD64"):
+            self.assertEqual(resolve_backend(), BACKEND_CUDA)
+
+    def test_default_backend_auto_maps_to_qnn_on_arm64_host(self) -> None:
+        with patch.object(bootstrap.platform, "machine", return_value="aarch64"):
+            self.assertEqual(resolve_default_backend(), BACKEND_QNN)
 
     def test_download_live_model_emits_byte_progress_from_snapshot_download(self) -> None:
         events: list[tuple[str, dict]] = []

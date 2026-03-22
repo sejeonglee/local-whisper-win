@@ -32,6 +32,22 @@ The current MVP is aimed at native Windows x86_64 with an NVIDIA GPU. The primar
 - On first launch, the app downloads the model into `%LOCALAPPDATA%\\WhisperWindows\\models\\large-v3-turbo`.
 - Later launches reuse the cached model.
 
+### Qualcomm Snapdragon X Elite (Arm64) Path
+
+The app now keeps the existing `faster-whisper` pipeline and adds an optional separate runtime path for ARM64 devices:
+
+- ARM64 fallback backend auto-detection is available through `WHISPER_WINDOWS_BACKEND=auto` (default).
+- On ARM64, `auto` selects `qnn` so startup attempts the Qualcomm path when a valid model path is provided.
+- Use `WHISPER_WINDOWS_BACKEND=cuda` on x86_64/desktop GPUs.
+
+For Qualcomm runtime on Snapdragon X Elite:
+
+- Set `WHISPER_WINDOWS_QUALCOMM_MODEL_PATH` to the local model binary (`whisper_large_v3_turbo-hfwhisperdecoder-qualcomm_snapdragon_x_elite.bin`).
+- Install `onnxruntime-qnn` in the sidecar runtime (`pip install "onnxruntime-qnn>=1.18.0"` or platform-specific package manager flow).
+- Verify the model with Qualcomm AI Hub and QAIRT/QNN SDK guidance:
+  - [Qualcomm AI Hub Model Page](https://aihub.qualcomm.com/models/whisper_large_v3_turbo)
+  - [ONNX Runtime QNN Execution Provider](https://onnxruntime.ai/docs/execution-providers/QNN-ExecutionProvider.html)
+
 ## Native Windows Development Setup
 
 You need these tools installed on the build machine:
