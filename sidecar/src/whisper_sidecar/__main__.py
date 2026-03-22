@@ -3,10 +3,10 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-from .bootstrap import BootstrapResult, ensure_model_ready
+from .bootstrap import ASR_ENGINE_QWEN3, BootstrapResult, ensure_model_ready
 from .ipc import ProtocolError, configure_stdio, emit_error, emit_event, iter_commands
 from .recorder import Recorder, StubRecorder
-from .transcriber import StubTranscriber, WhisperTranscriber
+from .transcriber import QwenTranscriber, StubTranscriber, WhisperTranscriber
 
 
 def main() -> int:
@@ -20,6 +20,7 @@ def main() -> int:
 
     emit_event(
         "ready",
+        engine=getattr(transcriber, "engine", bootstrap_result.engine),
         model=getattr(transcriber, "model_name", bootstrap_result.model),
         backend=getattr(transcriber, "backend", bootstrap_result.backend),
         bootstrap_mode="scaffold" if bootstrap_result.stub else "live",
@@ -39,9 +40,22 @@ def main() -> int:
                 emit_event("transcribing")
                 result = transcriber.transcribe(recording)
                 if result.text:
-                    emit_event("transcription", text=result.text)
+                    payload: dict[str, object] = {
+                        "text": result.text,
+                        "engine": result.engine,
+                        "model": result.model,
+                        "backend": result.backend,
+                    }
+                    if result.language:
+                        payload["language"] = result.language
+                    emit_event("transcription", **payload)
                 else:
-                    emit_event("empty_audio")
+                    emit_event(
+                        "empty_audio",
+                        engine=result.engine,
+                        model=result.model,
+                        backend=result.backend,
+                    )
             elif item.cmd == "shutdown":
                 return 0
             else:
@@ -54,6 +68,15 @@ def main() -> int:
 
 def create_runtime(bootstrap_result: BootstrapResult) -> tuple[Any, Any]:
     if not bootstrap_result.stub:
+        if bootstrap_result.engine == ASR_ENGINE_QWEN3:
+            return (
+                Recorder(),
+                QwenTranscriber.load(
+                    model_name=bootstrap_result.model,
+                    model_source=str(bootstrap_result.model_path) if bootstrap_result.model_path else None,
+                    backend=bootstrap_result.backend,
+                ),
+            )
         return (
             Recorder(),
             WhisperTranscriber.load(
@@ -63,7 +86,14 @@ def create_runtime(bootstrap_result: BootstrapResult) -> tuple[Any, Any]:
             ),
         )
 
-    return StubRecorder(), StubTranscriber()
+    return (
+        StubRecorder(),
+        StubTranscriber(
+            engine=bootstrap_result.engine,
+            model_name=bootstrap_result.model,
+            backend=bootstrap_result.backend,
+        ),
+    )
 
 
 if __name__ == "__main__":

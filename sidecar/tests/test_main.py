@@ -23,11 +23,17 @@ class FakeRecorder:
 
 
 class FakeTranscriber:
+    engine = "whisper"
     backend = "cuda"
     model_name = "large-v3-turbo"
 
     def transcribe(self, recording: RecordingResult) -> TranscriptionResult:
-        return TranscriptionResult(text="dictated text", backend=self.backend, model=self.model_name)
+        return TranscriptionResult(
+            text="dictated text",
+            engine=self.engine,
+            backend=self.backend,
+            model=self.model_name,
+        )
 
 
 class MainLoopTests(unittest.TestCase):
@@ -59,7 +65,11 @@ class MainLoopTests(unittest.TestCase):
 
         self.assertEqual((recorder, transcriber), ("stub-recorder", "stub-transcriber"))
         recorder_cls.assert_called_once_with()
-        transcriber_cls.assert_called_once_with()
+        transcriber_cls.assert_called_once_with(
+            engine=bootstrap_result.engine,
+            model_name=bootstrap_result.model,
+            backend=bootstrap_result.backend,
+        )
 
     def test_main_emits_ready_and_transcription_flow(self) -> None:
         events = []
@@ -92,7 +102,9 @@ class MainLoopTests(unittest.TestCase):
         self.assertEqual(events[0][0], "ready")
         self.assertEqual(events[1][0], "listening")
         self.assertEqual(events[2][0], "transcribing")
-        self.assertEqual(events[3], ("transcription", {"text": "dictated text"}))
+        self.assertEqual(events[3][0], "transcription")
+        self.assertEqual(events[3][1]["text"], "dictated text")
+        self.assertEqual(events[3][1]["engine"], "whisper")
         configure_stdio.assert_called_once()
         bootstrap.assert_called_once()
 

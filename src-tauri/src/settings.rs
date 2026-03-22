@@ -6,12 +6,26 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{Code, Shortcut};
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+H";
+pub const DEFAULT_ASR_ENGINE: &str = "whisper";
 const SETTINGS_FILE_NAME: &str = "settings.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PersistedSettings {
     hotkey: String,
+    #[serde(default = "default_asr_engine")]
+    asr_engine: String,
+}
+
+fn default_asr_engine() -> String {
+    DEFAULT_ASR_ENGINE.to_string()
+}
+
+fn default_settings() -> PersistedSettings {
+    PersistedSettings {
+        hotkey: DEFAULT_HOTKEY.to_string(),
+        asr_engine: default_asr_engine(),
+    }
 }
 
 pub fn load_hotkey(app: &AppHandle) -> String {
@@ -20,17 +34,33 @@ pub fn load_hotkey(app: &AppHandle) -> String {
         .unwrap_or_else(|| DEFAULT_HOTKEY.to_string())
 }
 
+pub fn load_asr_engine(app: &AppHandle) -> String {
+    read_settings(app)
+        .and_then(|settings| normalize_asr_engine(&settings.asr_engine).ok())
+        .unwrap_or_else(|| DEFAULT_ASR_ENGINE.to_string())
+}
+
 pub fn save_hotkey(app: &AppHandle, hotkey: &str) -> Result<(), String> {
+    let mut settings = read_settings(app).unwrap_or_else(default_settings);
+    settings.hotkey = hotkey.to_string();
+    write_settings(app, &settings)
+}
+
+pub fn save_asr_engine(app: &AppHandle, asr_engine: &str) -> Result<(), String> {
+    let mut settings = read_settings(app).unwrap_or_else(default_settings);
+    settings.asr_engine = asr_engine.to_string();
+    write_settings(app, &settings)
+}
+
+fn write_settings(app: &AppHandle, settings: &PersistedSettings) -> Result<(), String> {
     let path = settings_path(app)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("Failed to create settings directory: {err}"))?;
     }
 
-    let contents = serde_json::to_vec_pretty(&PersistedSettings {
-        hotkey: hotkey.to_string(),
-    })
-    .map_err(|err| format!("Failed to encode settings: {err}"))?;
+    let contents =
+        serde_json::to_vec_pretty(settings).map_err(|err| format!("Failed to encode settings: {err}"))?;
 
     fs::write(path, contents).map_err(|err| format!("Failed to save settings: {err}"))
 }
@@ -51,6 +81,14 @@ pub fn normalize_hotkey(input: &str) -> Result<String, String> {
     }
 
     Ok(format_shortcut_display(shortcut))
+}
+
+pub fn normalize_asr_engine(input: &str) -> Result<String, String> {
+    match input.trim().to_ascii_lowercase().as_str() {
+        "whisper" => Ok("whisper".to_string()),
+        "qwen3" => Ok("qwen3".to_string()),
+        _ => Err("Choose either whisper or qwen3.".to_string()),
+    }
 }
 
 fn read_settings(app: &AppHandle) -> Option<PersistedSettings> {
