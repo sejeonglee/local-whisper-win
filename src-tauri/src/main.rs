@@ -67,9 +67,14 @@ fn set_asr_engine(app: AppHandle, asr_engine: String) -> Result<state::AppSnapsh
 
     if matches!(
         phase,
-        state::AppPhase::ListeningRequested | state::AppPhase::Listening | state::AppPhase::Transcribing
+        state::AppPhase::ListeningRequested
+            | state::AppPhase::Listening
+            | state::AppPhase::Transcribing
     ) {
-        return Err("Wait until the current dictation cycle finishes before switching the ASR engine.".to_string());
+        return Err(
+            "Wait until the current dictation cycle finishes before switching the ASR engine."
+                .to_string(),
+        );
     }
 
     debug_log::append(format!(
@@ -121,7 +126,11 @@ fn main() {
         .manage(state::AppState::default())
         .manage(sidecar::SidecarRuntime::default())
         .manage(tray::TrayState::default())
-        .invoke_handler(tauri::generate_handler![get_app_state, set_hotkey, set_asr_engine])
+        .invoke_handler(tauri::generate_handler![
+            get_app_state,
+            set_hotkey,
+            set_asr_engine
+        ])
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -166,6 +175,11 @@ fn main() {
             debug_log::append("startup sidecar spawn attempted");
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let _ = sidecar::stop_sidecar(app, std::time::Duration::from_secs(2));
+            }
+        });
 }

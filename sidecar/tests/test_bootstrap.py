@@ -138,6 +138,32 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(events[-1][0], "model_download_progress")
         self.assertEqual(events[-1][1]["received_bytes"], 30)
 
+    def test_prune_stale_model_dirs_keeps_only_active_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_root = Path(temp_dir)
+            active_dir = cache_root / bootstrap.ASR_ENGINE_QWEN3 / "Qwen3-ASR-1.7B"
+            stale_same_engine = cache_root / bootstrap.ASR_ENGINE_QWEN3 / "Qwen3-ASR-0.6B"
+            stale_other_engine = cache_root / bootstrap.ASR_ENGINE_WHISPER / MODEL_NAME
+            unrelated_dir = cache_root / "custom"
+
+            active_dir.mkdir(parents=True)
+            stale_same_engine.mkdir(parents=True)
+            stale_other_engine.mkdir(parents=True)
+            unrelated_dir.mkdir(parents=True)
+
+            bootstrap.prune_stale_model_dirs(
+                cache_root,
+                bootstrap.ResolvedSelection(
+                    engine=bootstrap.ASR_ENGINE_QWEN3,
+                    model=bootstrap.QWEN_PRIMARY_MODEL_NAME,
+                ),
+            )
+
+            self.assertTrue(active_dir.exists())
+            self.assertFalse(stale_same_engine.exists())
+            self.assertFalse(stale_other_engine.exists())
+            self.assertTrue(unrelated_dir.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

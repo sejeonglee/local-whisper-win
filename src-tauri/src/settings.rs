@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -7,6 +8,7 @@ use tauri_plugin_global_shortcut::{Code, Shortcut};
 
 pub const DEFAULT_HOTKEY: &str = "Ctrl+H";
 pub const DEFAULT_ASR_ENGINE: &str = "whisper";
+const LOCAL_DATA_DIR_NAME: &str = "WhisperWindows";
 const SETTINGS_FILE_NAME: &str = "settings.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,13 +56,24 @@ pub fn save_asr_engine(app: &AppHandle, asr_engine: &str) -> Result<(), String> 
 
 fn write_settings(app: &AppHandle, settings: &PersistedSettings) -> Result<(), String> {
     let path = settings_path(app)?;
+    let legacy_path = legacy_settings_path(app).ok();
+    write_settings_to_path(&path, settings)?;
+
+    if legacy_path.as_ref().is_some_and(|legacy| legacy != &path) {
+        cleanup_legacy_settings(legacy_path.as_ref().expect("legacy path checked"));
+    }
+
+    Ok(())
+}
+
+fn write_settings_to_path(path: &PathBuf, settings: &PersistedSettings) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("Failed to create settings directory: {err}"))?;
     }
 
-    let contents =
-        serde_json::to_vec_pretty(settings).map_err(|err| format!("Failed to encode settings: {err}"))?;
+    let contents = serde_json::to_vec_pretty(settings)
+        .map_err(|err| format!("Failed to encode settings: {err}"))?;
 
     fs::write(path, contents).map_err(|err| format!("Failed to save settings: {err}"))
 }
@@ -92,17 +105,50 @@ pub fn normalize_asr_engine(input: &str) -> Result<String, String> {
 }
 
 fn read_settings(app: &AppHandle) -> Option<PersistedSettings> {
-    let path = settings_path(app).ok()?;
-    let contents = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&contents).ok()
+    let primary_path = settings_path(app).ok()?;
+    if let Some(settings) = read_settings_from_path(&primary_path) {
+        return Some(settings);
+    }
+
+    let legacy_path = legacy_settings_path(app).ok()?;
+    let settings = read_settings_from_path(&legacy_path)?;
+    let _ = write_settings_to_path(&primary_path, &settings);
+    cleanup_legacy_settings(&legacy_path);
+    Some(settings)
 }
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_local_data_root(app)?.join(SETTINGS_FILE_NAME))
+}
+
+fn legacy_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     let config_dir = app
         .path()
         .app_config_dir()
         .map_err(|err| format!("Failed to resolve app config directory: {err}"))?;
     Ok(config_dir.join(SETTINGS_FILE_NAME))
+}
+
+fn app_local_data_root(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(local_app_data) = env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(local_app_data).join(LOCAL_DATA_DIR_NAME));
+    }
+
+    app.path()
+        .app_config_dir()
+        .map_err(|err| format!("Failed to resolve fallback app data directory: {err}"))
+}
+
+fn read_settings_from_path(path: &PathBuf) -> Option<PersistedSettings> {
+    let contents = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+fn cleanup_legacy_settings(path: &PathBuf) {
+    let _ = fs::remove_file(path);
+    if let Some(parent) = path.parent() {
+        let _ = fs::remove_dir(parent);
+    }
 }
 
 fn format_shortcut_display(shortcut: Shortcut) -> String {

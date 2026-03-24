@@ -4,6 +4,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $sidecarRoot = Join-Path $repoRoot "sidecar"
 $venvConfigPath = Join-Path $sidecarRoot ".venv\\pyvenv.cfg"
 $runtimeRoot = Join-Path $sidecarRoot ".python-runtime"
+$runtimeSitePackagesPath = Join-Path $runtimeRoot "Lib\\site-packages"
 
 if (-not (Test-Path $venvConfigPath)) {
   throw "Missing sidecar virtualenv metadata at $venvConfigPath. Create sidecar/.venv before building installers."
@@ -59,6 +60,27 @@ if (-not (Test-Path $pythonExe)) {
 $sitePackagesPath = Join-Path $sidecarRoot ".venv\\Lib\\site-packages"
 if (-not (Test-Path $sitePackagesPath)) {
   throw "Missing sidecar site-packages at $sitePackagesPath. Install sidecar dependencies before building."
+}
+
+New-Item -ItemType Directory -Path $runtimeSitePackagesPath -Force | Out-Null
+
+$sitePackagesRobocopyArgs = @(
+  $sitePackagesPath,
+  $runtimeSitePackagesPath,
+  "/E",
+  "/R:1",
+  "/W:1",
+  "/NFL",
+  "/NDL",
+  "/NJH",
+  "/NJS",
+  "/XF",
+  "*.lib"
+)
+
+& robocopy @sitePackagesRobocopyArgs | Out-Null
+if ($LASTEXITCODE -ge 8) {
+  throw "robocopy failed while staging sidecar site-packages (exit code $LASTEXITCODE)."
 }
 
 $runtimeSizeMb = [math]::Round(((Get-ChildItem $runtimeRoot -Recurse -Force | Measure-Object Length -Sum).Sum / 1MB), 2)
