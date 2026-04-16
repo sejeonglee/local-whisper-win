@@ -63,7 +63,7 @@ pub fn setup(app: &AppHandle) -> Result<(), String> {
             let _ = hide_overlay(app);
         }
         QUIT_ID => {
-            let _ = sidecar::request_shutdown(app);
+            let _ = sidecar::stop_sidecar(app, std::time::Duration::from_secs(2));
             app.exit(0);
         }
         _ => {}

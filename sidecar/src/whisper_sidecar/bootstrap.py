@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -306,6 +307,27 @@ def ensure_live_model_ready(
     return model_dir
 
 
+def prune_stale_model_dirs(cache_dir: Path, selection: ResolvedSelection) -> None:
+    if not cache_dir.exists():
+        return
+
+    active_engine = selection.engine
+    active_model_dir = model_dir_name(selection.model)
+    known_engines = {ASR_ENGINE_WHISPER, ASR_ENGINE_QWEN3}
+
+    for engine_dir in cache_dir.iterdir():
+        if not engine_dir.is_dir() or engine_dir.name not in known_engines:
+            continue
+
+        if engine_dir.name != active_engine:
+            shutil.rmtree(engine_dir, ignore_errors=True)
+            continue
+
+        for model_dir in engine_dir.iterdir():
+            if model_dir.is_dir() and model_dir.name != active_model_dir:
+                shutil.rmtree(model_dir, ignore_errors=True)
+
+
 def detect_qwen_gpu_memory() -> int:
     try:
         import torch
@@ -399,6 +421,8 @@ def ensure_model_ready(emit_event: Callable[..., None], cache_dir: Path | None =
             )
     else:
         model_path = ensure_live_model_ready(emit_event, resolved_cache_dir, selection)
+
+    prune_stale_model_dirs(resolved_cache_dir, selection)
 
     emit_event(
         "loading_model",

@@ -55,6 +55,24 @@ class RecorderTests(unittest.TestCase):
         with self.assertRaises(RecorderError):
             recorder.stop()
 
+    def test_stop_clears_internal_samples_after_success(self) -> None:
+        times = iter([10.0, 10.3])
+        created_streams: list[FakeStream] = []
+
+        def stream_factory(**kwargs):
+            stream = FakeStream(**kwargs)
+            created_streams.append(stream)
+            return stream
+
+        recorder = Recorder(clock=lambda: next(times), stream_factory=stream_factory)
+        recorder.start()
+        created_streams[0].callback([[0.1], [0.2]], 2, None, None)
+
+        result = recorder.stop()
+
+        self.assertEqual(result.samples, [0.1, 0.2])
+        self.assertEqual(recorder._samples, [])
+
     def test_duration_guardrail_raises_error_when_recording_runs_too_long(self) -> None:
         times = iter([2.0, 2.0 + MAX_RECORDING_SECONDS + 1])
         recorder = Recorder(clock=lambda: next(times), stream_factory=lambda **kwargs: FakeStream(**kwargs))
@@ -62,6 +80,7 @@ class RecorderTests(unittest.TestCase):
 
         with self.assertRaises(RecorderError):
             recorder.stop()
+        self.assertEqual(recorder._samples, [])
 
 
 if __name__ == "__main__":

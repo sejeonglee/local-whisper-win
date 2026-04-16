@@ -32,9 +32,21 @@
     "icon": [
       "icons/icon.ico"
     ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows/installer-hooks.nsh"
+      },
+      "wix": {
+        "fragmentPaths": [
+          "windows/cleanup.wxs"
+        ],
+        "componentGroupRefs": [
+          "CleanupAppDataGroup"
+        ]
+      }
+    },
     "resources": {
       "../sidecar/.python-runtime/": "sidecar/python/",
-      "../sidecar/.venv/Lib/site-packages/": "sidecar/site-packages/",
       "../sidecar/src/": "sidecar/src/"
     },
     "targets": "all"

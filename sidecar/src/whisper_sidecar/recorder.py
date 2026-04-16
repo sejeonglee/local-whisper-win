@@ -70,11 +70,16 @@ class Recorder:
         stream = self._stream
         self._started_at = None
         self._stream = None
+        samples: list[float] = []
 
         try:
             stream.stop()
         finally:
-            stream.close()
+            try:
+                stream.close()
+            finally:
+                samples = self._samples
+                self._samples = []
 
         stopped_at = self._clock()
         if stopped_at - started_at > self._max_recording_seconds:
@@ -85,7 +90,7 @@ class Recorder:
         return RecordingResult(
             started_at=started_at,
             stopped_at=stopped_at,
-            samples=list(self._samples),
+            samples=samples,
         )
 
     def _handle_audio(self, indata: Any, _frames: int, _time_info: Any, status: Any) -> None:

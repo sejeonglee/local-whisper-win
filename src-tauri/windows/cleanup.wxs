@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+  <Fragment>
+    <Property Id="WHISPERWINDOWS_LOCALDATA_ROOT" Value="[LocalAppDataFolder]WhisperWindows" />
+    <Property Id="WHISPERWINDOWS_TAURI_LOCAL_ROOT" Value="[LocalAppDataFolder]com.sejeonglee.whisperwindows" />
+    <Property Id="WHISPERWINDOWS_TAURI_ROAMING_ROOT" Value="[AppDataFolder]com.sejeonglee.whisperwindows" />
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="CleanupAppDataGroup">
+      <Component Id="CleanupAppDataRoots" Directory="TARGETDIR" Guid="*">
+        <RegistryValue Root="HKCU"
+                       Key="Software\\{{manufacturer}}\\{{product_name}}"
+                       Name="Cleanup App Data Roots"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+        <util:RemoveFolderEx On="uninstall" Property="WHISPERWINDOWS_LOCALDATA_ROOT" />
+        <util:RemoveFolderEx On="uninstall" Property="WHISPERWINDOWS_TAURI_LOCAL_ROOT" />
+        <util:RemoveFolderEx On="uninstall" Property="WHISPERWINDOWS_TAURI_ROAMING_ROOT" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

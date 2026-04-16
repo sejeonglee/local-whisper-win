@@ -7,14 +7,22 @@ use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
+use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows::Win32::System::Threading::{
+    OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+};
 
 use crate::{clipboard, debug_log, settings, state};
 
 const SIDE_CAR_STARTUP_WATCHDOG_SECS: u64 = 300;
+const SIDE_CAR_SHUTDOWN_GRACE_PERIOD_MS: u64 = 2_000;
+const SIDE_CAR_FORCE_KILL_TIMEOUT_MS: u64 = 5_000;
 
 #[derive(Default)]
 pub struct SidecarRuntime {
     stdin: Mutex<Option<ChildStdin>>,
+    pid: Mutex<Option<u32>>,
     shutdown_requested: Mutex<bool>,
     generation: Mutex<u64>,
 }
@@ -72,7 +80,8 @@ pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
     let mut child = command
         .spawn()
         .map_err(|err| format!("Failed to start sidecar: {err}"))?;
-    debug_log::append(format!("sidecar pid={}", child.id()));
+    let pid = child.id();
+    debug_log::append(format!("sidecar pid={pid}"));
     let stdin = child
         .stdin
         .take()
@@ -91,6 +100,10 @@ pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
         .lock()
         .expect("sidecar runtime poisoned") = Some(stdin);
     *app.state::<SidecarRuntime>()
+        .pid
+        .lock()
+        .expect("sidecar runtime poisoned") = Some(pid);
+    *app.state::<SidecarRuntime>()
         .shutdown_requested
         .lock()
         .expect("sidecar runtime poisoned") = false;
@@ -104,17 +117,10 @@ pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn restart_sidecar(app: &AppHandle) -> Result<(), String> {
-    let has_running_sidecar = app
-        .state::<SidecarRuntime>()
-        .stdin
-        .lock()
-        .map(|guard| guard.is_some())
-        .unwrap_or(false);
-
-    if has_running_sidecar {
-        let _ = request_shutdown(app);
-        std::thread::sleep(Duration::from_millis(350));
-    }
+    stop_sidecar(
+        app,
+        Duration::from_millis(SIDE_CAR_SHUTDOWN_GRACE_PERIOD_MS),
+    )?;
 
     spawn_sidecar(app)
 }
@@ -130,6 +136,39 @@ pub fn request_shutdown(app: &AppHandle) -> Result<(), String> {
     }
 
     send_command(app, "shutdown")
+}
+
+pub fn stop_sidecar(app: &AppHandle, graceful_timeout: Duration) -> Result<(), String> {
+    let Some(pid) = current_pid(app) else {
+        clear_runtime_handles(app);
+        return Ok(());
+    };
+
+    let shutdown_result = request_shutdown(app);
+    if let Err(err) = &shutdown_result {
+        debug_log::append(format!(
+            "sidecar pid={pid} shutdown request failed; continuing with exit wait: {err}"
+        ));
+    }
+
+    if wait_for_process_exit(pid, graceful_timeout)? {
+        clear_runtime_handles(app);
+        return Ok(());
+    }
+
+    debug_log::append(format!(
+        "sidecar pid={pid} exceeded graceful shutdown timeout; forcing termination"
+    ));
+    terminate_process_by_pid(pid)?;
+
+    if !wait_for_process_exit(pid, Duration::from_millis(SIDE_CAR_FORCE_KILL_TIMEOUT_MS))? {
+        return Err(format!(
+            "Timed out waiting for sidecar pid={pid} to terminate after kill."
+        ));
+    }
+
+    clear_runtime_handles(app);
+    Ok(())
 }
 
 pub fn send_command(app: &AppHandle, cmd: &str) -> Result<(), String> {
@@ -355,13 +394,20 @@ fn spawn_wait_thread(app: AppHandle, mut child: Child, generation: u64) {
                 guard.take();
             }
         }
+        if let Ok(mut guard) = app.state::<SidecarRuntime>().pid.lock() {
+            if is_current {
+                guard.take();
+            }
+        }
 
         match status {
             Ok(status) if !status.success() && !shutdown_requested && is_current => {
                 let mut message = format!("Sidecar exited with status {status}.");
                 if matches!(
                     phase,
-                    state::AppPhase::Starting | state::AppPhase::DownloadingModel | state::AppPhase::LoadingModel
+                    state::AppPhase::Starting
+                        | state::AppPhase::DownloadingModel
+                        | state::AppPhase::LoadingModel
                 ) {
                     message = format!(
                         "Sidecar exited while starting the runtime ({:?}) before reporting ready. Check sidecar logs for Qwen model load details.",
@@ -396,7 +442,9 @@ fn spawn_startup_watchdog(app: AppHandle, generation: u64) {
         let snapshot = state::snapshot(&app);
         if matches!(
             snapshot.phase,
-            state::AppPhase::Starting | state::AppPhase::DownloadingModel | state::AppPhase::LoadingModel
+            state::AppPhase::Starting
+                | state::AppPhase::DownloadingModel
+                | state::AppPhase::LoadingModel
         ) {
             let _ = state::set_error(
                 &app,
@@ -406,6 +454,64 @@ fn spawn_startup_watchdog(app: AppHandle, generation: u64) {
             );
         }
     });
+}
+
+fn current_pid(app: &AppHandle) -> Option<u32> {
+    app.state::<SidecarRuntime>()
+        .pid
+        .lock()
+        .ok()
+        .and_then(|guard| *guard)
+}
+
+fn clear_runtime_handles(app: &AppHandle) {
+    if let Ok(mut guard) = app.state::<SidecarRuntime>().stdin.lock() {
+        guard.take();
+    }
+    if let Ok(mut guard) = app.state::<SidecarRuntime>().pid.lock() {
+        guard.take();
+    }
+}
+
+fn wait_for_process_exit(pid: u32, timeout: Duration) -> Result<bool, String> {
+    unsafe {
+        let handle = match OpenProcess(
+            PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            pid,
+        ) {
+            Ok(handle) => handle,
+            Err(_) => return Ok(true),
+        };
+        let wait_result = WaitForSingleObject(handle, wait_timeout(timeout));
+        let _ = CloseHandle(handle);
+
+        if wait_result == WAIT_OBJECT_0 {
+            return Ok(true);
+        }
+        if wait_result == WAIT_TIMEOUT {
+            return Ok(false);
+        }
+
+        Err(format!(
+            "Unexpected wait status {wait_result:?} while waiting for sidecar pid={pid}."
+        ))
+    }
+}
+
+fn terminate_process_by_pid(pid: u32) -> Result<(), String> {
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, pid)
+            .map_err(|err| format!("Failed to open sidecar pid={pid} for termination: {err}"))?;
+        let terminate_result = TerminateProcess(handle, 1)
+            .map_err(|err| format!("Failed to terminate sidecar pid={pid}: {err}"));
+        let _ = CloseHandle(handle);
+        terminate_result
+    }
+}
+
+fn wait_timeout(timeout: Duration) -> u32 {
+    timeout.as_millis().min(u32::MAX as u128) as u32
 }
 
 fn handle_stdout_line(app: &AppHandle, line: &str) {
@@ -459,4 +565,46 @@ fn is_current_generation(app: &AppHandle, generation: u64) -> bool {
         .lock()
         .map(|guard| *guard == generation)
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{terminate_process_by_pid, wait_for_process_exit};
+    use std::process::Command;
+    use std::time::Duration;
+
+    #[test]
+    fn wait_for_process_exit_detects_finished_child() {
+        let mut child = Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .expect("spawn child");
+        let pid = child.id();
+        let _ = child.wait().expect("wait child");
+
+        assert!(
+            wait_for_process_exit(pid, Duration::from_millis(250)).unwrap(),
+            "expected finished child to report as exited"
+        );
+    }
+
+    #[test]
+    fn terminate_process_by_pid_stops_running_child() {
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping 127.0.0.1 -n 6 >NUL"])
+            .spawn()
+            .expect("spawn long-lived child");
+        let pid = child.id();
+
+        assert!(
+            !wait_for_process_exit(pid, Duration::from_millis(100)).unwrap(),
+            "expected long-lived child to still be running"
+        );
+        terminate_process_by_pid(pid).expect("terminate child");
+        let _ = child.wait().expect("wait terminated child");
+        assert!(
+            wait_for_process_exit(pid, Duration::from_millis(250)).unwrap(),
+            "expected terminated child to exit promptly"
+        );
+    }
 }
